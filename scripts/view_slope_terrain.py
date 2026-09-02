@@ -20,12 +20,12 @@ import argparse
 
 import mujoco
 import mujoco.viewer
-
 from mjlab.terrains.terrain_generator import TerrainGenerator, TerrainGeneratorCfg
+
 from mjlab_microduck.tasks.slope_terrain import (
-    FlatRampTerrainCfg,
-    RAMP_DEG_MIN,
     RAMP_DEG_MAX,
+    RAMP_DEG_MIN,
+    FlatRampTerrainCfg,
 )
 
 
@@ -57,16 +57,52 @@ def build_model(rows, size, flat_length, ramp_range, runout, deg_min, deg_max):
 
 
 def main():
+    """Launch a MuJoCo viewer showing generated slope terrain tiles."""
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--rows", type=int, default=5, help="Nb de rangées = nb de raideurs affichées (défaut 5)")
-    p.add_argument("--size", type=float, nargs=2, default=(15.0, 4.0), help="Taille d'une tuile (x y) en m")
+    p.add_argument(
+        "--rows",
+        type=int,
+        default=5,
+        help="Nb de rangées = nb de raideurs affichées (défaut 5)",
+    )
+    p.add_argument(
+        "--size",
+        type=float,
+        nargs=2,
+        default=(15.0, 4.0),
+        help="Taille d'une tuile (x y) en m",
+    )
     p.add_argument("--flat-length", type=float, default=2.0, help="Longueur du plat de départ (m)")
-    p.add_argument("--ramp-min", type=float, default=3.0, help="Longueur horizontale mini de la rampe (m)")
-    p.add_argument("--ramp-max", type=float, default=8.0, help="Longueur horizontale maxi de la rampe (m)")
+    p.add_argument(
+        "--ramp-min",
+        type=float,
+        default=3.0,
+        help="Longueur horizontale mini de la rampe (m)",
+    )
+    p.add_argument(
+        "--ramp-max",
+        type=float,
+        default=8.0,
+        help="Longueur horizontale maxi de la rampe (m)",
+    )
     p.add_argument("--runout", type=float, default=4.0, help="Longueur du plat de sortie (m)")
-    p.add_argument("--deg-min", type=float, default=RAMP_DEG_MIN, help=f"Raideur min en degrés (défaut {RAMP_DEG_MIN})")
-    p.add_argument("--deg-max", type=float, default=RAMP_DEG_MAX, help=f"Raideur max en degrés (défaut {RAMP_DEG_MAX})")
-    p.add_argument("--build-only", action="store_true", help="Construit le modèle et quitte (test sans GUI)")
+    p.add_argument(
+        "--deg-min",
+        type=float,
+        default=RAMP_DEG_MIN,
+        help=f"Raideur min en degrés (défaut {RAMP_DEG_MIN})",
+    )
+    p.add_argument(
+        "--deg-max",
+        type=float,
+        default=RAMP_DEG_MAX,
+        help=f"Raideur max en degrés (défaut {RAMP_DEG_MAX})",
+    )
+    p.add_argument(
+        "--build-only",
+        action="store_true",
+        help="Construit le modèle et quitte (test sans GUI)",
+    )
     args = p.parse_args()
 
     model = build_model(

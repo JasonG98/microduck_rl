@@ -4,9 +4,7 @@ from mjlab_microduck.tasks.microduck_roller_standup_env_cfg import (
     EPISODE_LENGTH_S,
     make_microduck_roller_standup_env_cfg,
 )
-from mjlab_microduck.tasks.microduck_velocity_rollers_env_cfg import (
-    make_microduck_velocity_rollers_env_cfg,
-)
+from mjlab_microduck.tasks.microduck_velocity_rollers_env_cfg import make_microduck_velocity_rollers_env_cfg
 
 # Récompenses de PATINAGE : elles ne doivent pas survivre dans un env de relevé.
 SKATING_REWARDS = (
@@ -98,9 +96,9 @@ def test_obs_parity_with_roller_env():
     standup = make_microduck_roller_standup_env_cfg()
     roller = make_microduck_velocity_rollers_env_cfg()
     for grp in ("actor", "critic"):
-        assert list(standup.observations[grp].terms.keys()) == list(
-            roller.observations[grp].terms.keys()
-        ), f"layout d'observation divergent sur le groupe {grp}"
+        assert list(standup.observations[grp].terms.keys()) == list(roller.observations[grp].terms.keys()), (
+            f"layout d'observation divergent sur le groupe {grp}"
+        )
 
 
 def test_terrain_is_plain_plane():
@@ -143,14 +141,28 @@ def test_joint_indices_match_actual_roller_model():
     ]
 
     assert [articulated[i] for i in _LEG_JOINTS] == [
-        "left_hip_yaw", "left_hip_roll", "left_hip_pitch", "left_knee", "left_ankle",
-        "right_hip_yaw", "right_hip_roll", "right_hip_pitch", "right_knee", "right_ankle",
+        "left_hip_yaw",
+        "left_hip_roll",
+        "left_hip_pitch",
+        "left_knee",
+        "left_ankle",
+        "right_hip_yaw",
+        "right_hip_roll",
+        "right_hip_pitch",
+        "right_knee",
+        "right_ankle",
     ]
     assert [articulated[i] for i in _NECK_JOINTS] == [
-        "neck_pitch", "head_pitch", "head_yaw", "head_roll",
+        "neck_pitch",
+        "head_pitch",
+        "head_yaw",
+        "head_roll",
     ]
     assert [articulated[i] for i in _WHEEL_JOINTS] == [
-        "passive_LF_wheel", "passive_LR_wheel", "passive_RF_wheel", "passive_RR_wheel",
+        "passive_LF_wheel",
+        "passive_LR_wheel",
+        "passive_RF_wheel",
+        "passive_RR_wheel",
     ]
     # Aucun recouvrement, et les trois listes couvrent tous les joints.
     assert len(set(_LEG_JOINTS) | set(_NECK_JOINTS) | set(_WHEEL_JOINTS)) == len(articulated)
@@ -159,19 +171,19 @@ def test_joint_indices_match_actual_roller_model():
 def test_recovery_rewards_present_with_expected_weights():
     cfg = make_microduck_roller_standup_env_cfg()
     expected = {
-        "pose_stand_legs":      8.0,
-        "pose_stand_l1":        5.0,
-        "height_stand":         4.0,
-        "height_stand_sharp":   4.0,
-        "height_stand_l1":     30.0,
-        "com_upward_velocity":  3.0,
+        "pose_stand_legs": 8.0,
+        "pose_stand_l1": 5.0,
+        "height_stand": 4.0,
+        "height_stand_sharp": 4.0,
+        "height_stand_l1": 30.0,
+        "com_upward_velocity": 3.0,
         # gentle_rise : poids POSITIF. trunk_vertical_accel_penalty renvoie déjà
         # -|a_z|, donc un poids négatif en faisait une RÉCOMPENSE de la violence
         # (bug mesuré : Episode_Reward/gentle_rise loggée à +0.0118).
-        "gentle_rise":         +0.02,
-        "upright_linear":       6.0,
-        "upright_sharp":        6.0,
-        "standing_composite":  15.0,
+        "gentle_rise": +0.02,
+        "upright_linear": 6.0,
+        "upright_sharp": 6.0,
+        "standing_composite": 15.0,
         # -2e-3 ne contribuait que -0.0002/pas face à +41.6 de tâche : nul.
         # -2.0 a mesuré -0.255/pas (run d8rnko6p) — pas le gel, mais on redescend
         # à -0.2 pour dégager le budget d'amortissement pendant qu'on isole.
@@ -217,9 +229,14 @@ def test_trunk_asset_cfgs_are_distinct_objects():
     """
     cfg = make_microduck_roller_standup_env_cfg()
     names = (
-        "height_stand", "height_stand_sharp", "height_stand_l1",
-        "com_upward_velocity", "gentle_rise", "upright_linear",
-        "upright_sharp", "standing_composite",
+        "height_stand",
+        "height_stand_sharp",
+        "height_stand_l1",
+        "com_upward_velocity",
+        "gentle_rise",
+        "upright_linear",
+        "upright_sharp",
+        "standing_composite",
     )
     seen = [id(cfg.rewards[n].params["asset_cfg"]) for n in names]
     assert len(set(seen)) == len(seen), "asset_cfg partagé entre plusieurs termes"
@@ -291,10 +308,7 @@ def test_ground_state_curriculum_ramps_easy_to_hard():
     # jamais (sinon la policy se relève puis retombe faute d'apprendre à tenir).
     for stage in stages:
         p = stage["params"]
-        total = (
-            p["standing_prob"] + p["sitting_prob"]
-            + p["face_down_prob"] + p["face_up_prob"]
-        )
+        total = p["standing_prob"] + p["sitting_prob"] + p["face_down_prob"] + p["face_up_prob"]
         assert abs(total - 1.0) < 1e-9
         assert p["sitting_prob"] == 0.0
         assert p["standing_prob"] > 0.0
@@ -341,9 +355,7 @@ def test_action_rate_ramp_is_the_standup_one_not_the_roller_one():
     # il ralentit l'action rapide dont le relevé depuis le dos a besoin. On
     # reprend la rampe du standup, qui plafonne à -1.0.
     cfg = make_microduck_roller_standup_env_cfg()
-    weights = [
-        s["weight"] for s in cfg.curriculum["action_rate_weight"].params["weight_stages"]
-    ]
+    weights = [s["weight"] for s in cfg.curriculum["action_rate_weight"].params["weight_stages"]]
     assert weights == [-0.4, -0.8, -1.0]
     assert cfg.rewards["action_rate_l2"].weight == -0.6
 
@@ -468,8 +480,7 @@ def test_already_negative_penalties_use_positive_weights():
     # (height_l1_penalty, pose_l1_penalty, trunk_vertical_accel_penalty).
     for name in ("height_stand_l1", "pose_stand_l1", "gentle_rise"):
         assert cfg.rewards[name].weight > 0, (
-            f"{name} appelle une fonction qui renvoie déjà du négatif : "
-            f"un poids négatif en ferait une récompense"
+            f"{name} appelle une fonction qui renvoie déjà du négatif : un poids négatif en ferait une récompense"
         )
     # Et ces termes renvoient une magnitude positive → poids négatif.
     for name in ("joint_torques_l2", "joint_torque_rate_l2", "action_rate_l2"):

@@ -1,8 +1,7 @@
 """Terrain custom « plat + rampe descendante » pour la tâche roller_slope.
 
-Le robot spawne sur une zone plate, reçoit une impulsion vers +x, roule
-jusqu'à la rampe et se laisse glisser. L'angle de la rampe est interpolé par
-la difficulté (curriculum) sur [RAMP_DEG_MIN, RAMP_DEG_MAX] degrés.
+Le robot spawne sur une zone plate, reçoit une impulsion vers +x, roule jusqu'à la rampe et se laisse glisser. L'angle
+de la rampe est interpolé par la difficulté (curriculum) sur [RAMP_DEG_MIN, RAMP_DEG_MAX] degrés.
 """
 
 from __future__ import annotations
@@ -12,7 +11,6 @@ from dataclasses import dataclass
 
 import mujoco
 import numpy as np
-
 from mjlab.terrains.terrain_generator import (
     SubTerrainCfg,
     TerrainGeometry,
@@ -23,9 +21,7 @@ RAMP_DEG_MIN = 2.0
 RAMP_DEG_MAX = 20.0
 
 
-def ramp_angle_by_difficulty(
-    difficulty: float, deg_min: float = RAMP_DEG_MIN, deg_max: float = RAMP_DEG_MAX
-) -> float:
+def ramp_angle_by_difficulty(difficulty: float, deg_min: float = RAMP_DEG_MIN, deg_max: float = RAMP_DEG_MAX) -> float:
     """Angle de rampe (radians) interpolé linéairement par la difficulté [0,1]."""
     d = float(np.clip(difficulty, 0.0, 1.0))
     return math.radians(deg_min + d * (deg_max - deg_min))
@@ -44,21 +40,21 @@ class FlatRampTerrainCfg(SubTerrainCfg):
          atterrisse sur du solide au lieu du vide.
     """
 
-    flat_length: float = 2.0                       # plat de départ (m)
-    ramp_length_range: tuple = (3.0, 8.0)          # longueur horizontale rampe (m), tirée au hasard
-    runout_length: float = 4.0                     # plat de sortie en bas (m)
-    spawn_on_ramp: float = 0.3                      # spawn ce nb de m SUR la rampe (gravité => roulement)
+    flat_length: float = 2.0  # plat de départ (m)
+    ramp_length_range: tuple = (
+        3.0,
+        8.0,
+    )  # longueur horizontale rampe (m), tirée au hasard
+    runout_length: float = 4.0  # plat de sortie en bas (m)
+    spawn_on_ramp: float = 0.3  # spawn ce nb de m SUR la rampe (gravité => roulement)
     deg_min: float = RAMP_DEG_MIN
     deg_max: float = RAMP_DEG_MAX
-    thickness: float = 0.5                          # épaisseur des box (m)
+    thickness: float = 0.5  # épaisseur des box (m)
 
-    def function(
-        self, difficulty: float, spec: mujoco.MjSpec, rng
-    ) -> TerrainOutput:
+    def function(self, difficulty: float, spec: mujoco.MjSpec, rng) -> TerrainOutput:
+        """Generate the flat, ramp, and runout geoms and the spawn origin."""
         total_max = self.flat_length + self.ramp_length_range[1] + self.runout_length
-        assert total_max <= self.size[0], (
-            f"flat+ramp_max+runout ({total_max}) must fit in size[0] ({self.size[0]})"
-        )
+        assert total_max <= self.size[0], f"flat+ramp_max+runout ({total_max}) must fit in size[0] ({self.size[0]})"
         body = spec.body("terrain")
         angle = ramp_angle_by_difficulty(difficulty, self.deg_min, self.deg_max)
         width = self.size[1]

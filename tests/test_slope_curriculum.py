@@ -1,4 +1,5 @@
 import torch
+
 from mjlab_microduck.tasks.mdp import slope_move_masks
 
 

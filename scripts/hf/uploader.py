@@ -1,8 +1,7 @@
 """Checkpoint uploader run inside an HF Job.
 
-Watches `logs/rsl_rl/**/model_*.pt` and uploads new/updated files to the
-target HF Model repo. Designed to be `nohup uv run`-launched from the job
-bootstrap, with auth coming from the HF_TOKEN secret injected by `hf jobs run`.
+Watches `logs/rsl_rl/**/model_*.pt` and uploads new/updated files to the target HF Model repo. Designed to be `nohup uv
+run`-launched from the job bootstrap, with auth coming from the HF_TOKEN secret injected by `hf jobs run`.
 """
 
 from __future__ import annotations
@@ -12,10 +11,11 @@ import sys
 import time
 from pathlib import Path
 
-from huggingface_hub import HfApi, CommitOperationAdd
+from huggingface_hub import CommitOperationAdd, HfApi
 
 
 def main() -> int:
+    """Watch a checkpoint directory and upload new files to a Hugging Face repo."""
     repo_id = os.environ.get("CKPT_REPO")
     if not repo_id:
         print("[uploader] CKPT_REPO not set, exiting", flush=True)
@@ -36,8 +36,8 @@ def main() -> int:
         try:
             files = list(root.glob("**/model_*.pt"))
             # also pick up the dumped configs once
-            files += [p for p in root.glob("**/params/*.yaml")]
-            files += [p for p in root.glob("**/params/*.json")]
+            files += list(root.glob("**/params/*.yaml"))
+            files += list(root.glob("**/params/*.json"))
 
             to_upload: list[CommitOperationAdd] = []
             for f in files:
@@ -49,9 +49,7 @@ def main() -> int:
                     continue
                 # use path-in-repo relative to logs/rsl_rl so the repo mirrors run dirs
                 rel = f.relative_to(root)
-                to_upload.append(
-                    CommitOperationAdd(path_in_repo=str(rel), path_or_fileobj=str(f))
-                )
+                to_upload.append(CommitOperationAdd(path_in_repo=str(rel), path_or_fileobj=str(f)))
                 sent[f] = mtime
 
             if to_upload:

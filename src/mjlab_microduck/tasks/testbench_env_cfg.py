@@ -1,26 +1,22 @@
 """XL330 test-bench RL environment.
 
-Single-DOF fixed-base joint tracking task for sim2real validation.  Starts at 0
-and must reach a target angle uniformly sampled in [-80°, 80°].  Uses the same
-observation noise and action-smoothness regularization as the microduck velocity
-env, with NO domain randomization so the learned policy can be transferred
-directly to the real XL330 testbench.
+Single-DOF fixed-base joint tracking task for sim2real validation.  Starts at 0 and must reach a target angle uniformly
+sampled in [-80°, 80°].  Uses the same observation noise and action-smoothness regularization as the microduck velocity
+env, with NO domain randomization so the learned policy can be transferred directly to the real XL330 testbench.
 """
 
 from __future__ import annotations
 
 import math
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import torch
-
 from mjlab.entity import Entity
 from mjlab.envs import ManagerBasedRlEnvCfg
+from mjlab.envs import mdp as base_mdp
 from mjlab.envs.manager_based_rl_env import ManagerBasedRlEnv
 from mjlab.envs.mdp.actions import JointPositionActionCfg
-from mjlab.envs import mdp as base_mdp
-from mjlab.managers.command_manager import CommandTerm
 from mjlab.managers import (
     CommandTermCfg,
     EventTermCfg,
@@ -29,6 +25,7 @@ from mjlab.managers import (
     RewardTermCfg,
     TerminationTermCfg,
 )
+from mjlab.managers.command_manager import CommandTerm
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.rl import (
     RslRlOnPolicyRunnerCfg,
@@ -43,7 +40,6 @@ from mjlab.viewer import ViewerConfig
 
 from mjlab_microduck.robot.testbench_constants import XL330_TESTBENCH_ROBOT_CFG
 
-
 # ----------------------------------------------------------------------------
 # Target angle command (single joint)
 # ----------------------------------------------------------------------------
@@ -54,9 +50,10 @@ TESTBENCH_MAX_ANGLE_RAD = math.radians(80.0)
 class TargetAngleCommand(CommandTerm):
     """Uniform single-scalar target angle command."""
 
-    cfg: "TargetAngleCommandCfg"
+    cfg: TargetAngleCommandCfg
 
-    def __init__(self, cfg: "TargetAngleCommandCfg", env: ManagerBasedRlEnv):
+    def __init__(self, cfg: TargetAngleCommandCfg, env: ManagerBasedRlEnv):
+        """Initialize the command term and cache the tracked joint id."""
         super().__init__(cfg, env)
         self.robot: Entity = env.scene[cfg.asset_name]
         self._target = torch.zeros(self.num_envs, 1, device=self.device)
@@ -66,13 +63,12 @@ class TargetAngleCommand(CommandTerm):
 
     @property
     def command(self) -> torch.Tensor:
+        """The current target angle command tensor."""
         return self._target
 
     def _resample_command(self, env_ids: torch.Tensor) -> None:
         lo, hi = self.cfg.range
-        self._target[env_ids, 0] = (
-            torch.rand(len(env_ids), device=self.device) * (hi - lo) + lo
-        )
+        self._target[env_ids, 0] = torch.rand(len(env_ids), device=self.device) * (hi - lo) + lo
 
     def _update_command(self) -> None:
         pass
@@ -84,6 +80,8 @@ class TargetAngleCommand(CommandTerm):
 
 @dataclass(kw_only=True)
 class TargetAngleCommandCfg(CommandTermCfg):
+    """Dataclass cfg for the uniform single-joint target angle command."""
+
     class_type: type[CommandTerm] = TargetAngleCommand
     asset_name: str = "robot"
     joint_name: str = "1"
@@ -102,7 +100,7 @@ def target_angle_tracking(
     std: float,
     asset_cfg: SceneEntityCfg,
 ) -> torch.Tensor:
-    """exp(-error^2 / std^2) reward for single-joint position tracking."""
+    """Exp(-error^2 / std^2) reward for single-joint position tracking."""
     target = env.command_manager.get_command(command_name)[:, 0]
     asset: Entity = env.scene[asset_cfg.name]
     joint_ids = asset_cfg.joint_ids
@@ -110,7 +108,7 @@ def target_angle_tracking(
     if q.dim() > 1:
         q = q[:, 0]
     err = q - target
-    return torch.exp(-(err ** 2) / (std ** 2))
+    return torch.exp(-(err**2) / (std**2))
 
 
 # ----------------------------------------------------------------------------
@@ -119,6 +117,7 @@ def target_angle_tracking(
 
 
 def make_testbench_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+    """Build the XL330 testbench env cfg (single-DOF tracking, no domain randomization)."""
     asset_cfg_full = SceneEntityCfg("robot", joint_names=("1",))
 
     # Observations (base noise copied from microduck velocity env; joint_vel

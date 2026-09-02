@@ -10,29 +10,22 @@ Usage:
 
 import argparse
 import json
-import os
 import sys
-from copy import copy
 from pathlib import Path
 
 import mujoco
 import numpy as np
 
 # ── Paths ──
-BAM_DIR = Path(os.path.expanduser("~/Rhoban/bam"))
+BAM_DIR = Path("~/Rhoban/bam").expanduser()
 DATA_DIR = BAM_DIR / "bam" / "data" / "processed"
 PARAMS_FILE = BAM_DIR / "params" / "xl330" / "m6_new.json"
 TESTBENCH_XML = (
-    Path(__file__).resolve().parent.parent
-    / "src"
-    / "mjlab_microduck"
-    / "robot"
-    / "xl330_test_bench"
-    / "scene.xml"
+    Path(__file__).resolve().parent.parent / "src" / "mjlab_microduck" / "robot" / "xl330_test_bench" / "scene.xml"
 )
 
 # ── Load M6 params ──
-with open(PARAMS_FILE) as f:
+with PARAMS_FILE.open() as f:
     M6 = json.load(f)
 
 # XL330 firmware constants
@@ -63,13 +56,9 @@ def compute_m6_friction(motor_torque, external_torque, dq):
     p = M6
     stribeck_coeff = np.exp(-(np.abs(dq / p["dtheta_stribeck"]) ** p["alpha"]))
 
-    gearbox_torque = np.abs(
-        external_torque * p["load_friction_external"]
-        - motor_torque * p["load_friction_motor"]
-    )
+    gearbox_torque = np.abs(external_torque * p["load_friction_external"] - motor_torque * p["load_friction_motor"])
     gearbox_torque_stribeck = np.abs(
-        external_torque * p["load_friction_external_stribeck"]
-        - motor_torque * p["load_friction_motor_stribeck"]
+        external_torque * p["load_friction_external_stribeck"] - motor_torque * p["load_friction_motor_stribeck"]
     )
 
     frictionloss = p["friction_base"]
@@ -179,6 +168,7 @@ def mujoco_rollout(log: dict) -> list[float]:
 
 
 def main():
+    """Validate the BAM M6 kernel against recorded testbench trajectories."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--plot", action="store_true", help="Show plots")
     parser.add_argument("--max-files", type=int, default=5)
@@ -195,7 +185,8 @@ def main():
 
     results = []
     for fpath in data_files:
-        log = json.load(open(fpath))
+        with fpath.open() as f:
+            log = json.load(f)
         name = f"{log['trajectory']}_m{log['mass']}_kp{log['kp']}"
         print(f"  {name}...", end=" ", flush=True)
 
@@ -216,9 +207,7 @@ def main():
         mae_mj = np.mean(np.abs(mj_np - real_np))
         mae_bam_vs_mj = np.mean(np.abs(bam_np - mj_np))
 
-        print(
-            f"MAE  bam_vs_real={mae_bam:.5f}  mj_vs_real={mae_mj:.5f}  bam_vs_mj={mae_bam_vs_mj:.5f}"
-        )
+        print(f"MAE  bam_vs_real={mae_bam:.5f}  mj_vs_real={mae_mj:.5f}  bam_vs_mj={mae_bam_vs_mj:.5f}")
 
         results.append(
             {
@@ -254,11 +243,11 @@ def main():
             if n == 1:
                 axes = [axes]
 
-            for ax, r in zip(axes, results):
+            for ax, r in zip(axes, results, strict=False):
                 t = np.arange(len(r["real"])) * 0.005
                 ax.plot(t, r["real"], "k-", lw=1.5, label="Real")
-                ax.plot(t, r["bam"], "b--", lw=1.2, label=f'BAM (MAE={r["mae_bam"]:.4f})')
-                ax.plot(t, r["mj"], "r:", lw=1.2, label=f'MuJoCo M6 (MAE={r["mae_mj"]:.4f})')
+                ax.plot(t, r["bam"], "b--", lw=1.2, label=f"BAM (MAE={r['mae_bam']:.4f})")
+                ax.plot(t, r["mj"], "r:", lw=1.2, label=f"MuJoCo M6 (MAE={r['mae_mj']:.4f})")
                 ax.set_title(r["name"])
                 ax.set_ylabel("Position (rad)")
                 ax.legend(fontsize=8)

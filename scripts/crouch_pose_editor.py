@@ -18,12 +18,13 @@ import mujoco
 import mujoco.viewer
 
 from mjlab_microduck.robot.microduck_constants import (
-    get_walk_rollers_spec,
     HOME_FRAME,
+    get_walk_rollers_spec,
 )
 
 
 def home_value(joint_name: str):
+    """Return the home position for the named joint."""
     for pattern, val in HOME_FRAME.joint_pos.items():
         if re.search(pattern, joint_name):
             return float(val)
@@ -57,8 +58,7 @@ if has_free:
     base_xy = data.qpos[0:2].copy()
     base_quat = data.qpos[3:7].copy()
 
-robot_geoms = [g for g in range(model.ngeom)
-               if model.geom_type[g] != mujoco.mjtGeom.mjGEOM_PLANE]
+robot_geoms = [g for g in range(model.ngeom) if model.geom_type[g] != mujoco.mjtGeom.mjGEOM_PLANE]
 
 mujoco.mj_forward(model, data)
 
@@ -80,8 +80,7 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
             data.qvel[0:6] = 0.0
             mujoco.mj_forward(model, data)
             try:
-                zmin = min(float(data.geom_xpos[g, 2] - model.geom_rbound[g])
-                           for g in robot_geoms)
+                zmin = min(float(data.geom_xpos[g, 2] - model.geom_rbound[g]) for g in robot_geoms)
                 data.qpos[2] -= zmin
                 mujoco.mj_forward(model, data)
             except Exception:

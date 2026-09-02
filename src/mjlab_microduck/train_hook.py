@@ -1,5 +1,6 @@
-"""Keep `train <task> ... --hf-jobs` working, whoever owns the `train` script.
+"""Keep `train <task> ...
 
+--hf-jobs` working, whoever owns the `train` script.
 The flag used to live in a `train` console script of our own, declared in
 `[project.scripts]` and documented as "shadowing" mjlab's. It shadows nothing:
 mjlab 1.3.0 declares `train` too, two distributions declaring the SAME script
@@ -37,8 +38,7 @@ _IN_JOB_ENV = "MICRODUCK_IN_HF_JOB"
 def _invoked_as_train() -> bool:
     """True when argv[0] is mjlab's trainer (console script or `-m`).
 
-    `play --hf-jobs` must NOT submit a training job; let that command's own
-    parser reject the flag instead.
+    `play --hf-jobs` must NOT submit a training job; let that command's own parser reject the flag instead.
     """
     prog = Path(sys.argv[0]).name
     return prog.removesuffix(".py").removesuffix("-script") == "train"
@@ -47,9 +47,8 @@ def _invoked_as_train() -> bool:
 def maybe_submit_to_hf_jobs() -> None:
     """Consume `--hf-jobs` and exit the process; a no-op without the flag.
 
-    Called at import time of `mjlab_microduck.tasks`, so it runs inside mjlab's
-    plugin loader. `SystemExit` is a `BaseException`, so it propagates through
-    the loader's `except Exception` and out of `import mjlab` — the local
+    Called at import time of `mjlab_microduck.tasks`, so it runs inside mjlab's plugin loader. `SystemExit` is a
+    `BaseException`, so it propagates through the loader's `except Exception` and out of `import mjlab` — the local
     trainer never starts.
     """
     if _FLAG not in sys.argv[1:]:

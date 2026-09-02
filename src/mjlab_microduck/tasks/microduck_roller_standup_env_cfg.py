@@ -57,7 +57,7 @@ from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg
 ROLLER_STAND_Z = 0.138
 ROLLER_PRONE_Z = 0.075
 
-EPISODE_LENGTH_S  = 6.0   # monter + stabiliser, comme standup
+EPISODE_LENGTH_S = 6.0  # monter + stabiliser, comme standup
 NUM_STEPS_PER_ENV = 24
 
 # ── Override de play : forcer la proportion de départs SUR LE DOS ─────────────
@@ -91,6 +91,7 @@ def _resolve_play_face_up():
         print(f"[roller_standup] STANDUP_PLAY_FACE_UP='{raw}' invalide -> défaut {PLAY_FACE_UP}")
         return PLAY_FACE_UP
 
+
 # ── Indices de joints — les roues passives sont INTERCALÉES ───────────────────
 # Ordre réel du modèle rollers (18 joints après le free-joint), vérifié dans
 # MuJoCo via get_walk_rollers_spec().compile() :
@@ -106,8 +107,8 @@ def _resolve_play_face_up():
 # _WHEEL_JOINTS servent à la documentation et au test d'indices : le cou est
 # résolu par NOM (neck_joint_pos_l2 appelle find_joints(r".*(neck|head).*") à
 # chaque pas) et les roues par la regex ^passive_.*.
-_LEG_JOINTS   = [0, 1, 2, 3, 4, 11, 12, 13, 14, 15]
-_NECK_JOINTS  = [7, 8, 9, 10]
+_LEG_JOINTS = [0, 1, 2, 3, 4, 11, 12, 13, 14, 15]
+_NECK_JOINTS = [7, 8, 9, 10]
 _WHEEL_JOINTS = [5, 6, 16, 17]
 
 # Récompenses de PATINAGE de l'env roller : aucun sens quand on est par terre.
@@ -149,9 +150,9 @@ def make_microduck_roller_standup_env_cfg(play: bool = False) -> ManagerBasedRlE
     # body_pose (6) restent zero-paddés → parité d'obs 61D préservée.
     command = cfg.commands["twist"]
     command.rel_standing_envs = 0.0
-    command.rel_heading_envs  = 0.0
-    command.heading_command   = False
-    command.ranges.heading    = None
+    command.rel_heading_envs = 0.0
+    command.heading_command = False
+    command.ranges.heading = None
     command.resampling_time_range = (EPISODE_LENGTH_S, EPISODE_LENGTH_S * 2)
     command.debug_vis = False
     command.ranges.lin_vel_x = (-0.01, 0.01)
@@ -358,10 +359,10 @@ def make_microduck_roller_standup_env_cfg(play: bool = False) -> ManagerBasedRlE
         func=microduck_mdp.set_random_ground_state,
         mode="reset",
         params={
-            "face_down_prob": 0.50,   # ventre (+90° de pitch)
-            "face_up_prob":   0.00,   # dos — le plus dur, introduit tard
-            "sitting_prob":   0.00,
-            "standing_prob":  0.50,
+            "face_down_prob": 0.50,  # ventre (+90° de pitch)
+            "face_up_prob": 0.00,  # dos — le plus dur, introduit tard
+            "sitting_prob": 0.00,
+            "standing_prob": 0.50,
             "sitting_joint_overrides": None,
             # Les deux poses de départ (ventre/dos) partagent une SEULE plage de z,
             # or leurs contacts n'ont rien de commun : le ventre ne décolle du sol
@@ -370,8 +371,8 @@ def make_microduck_roller_standup_env_cfg(play: bool = False) -> ManagerBasedRlE
             # toute interpénétration côté ventre (mesuré : à 0.05, +25 mm dans le
             # sol), au prix d'un dos qui démarre 28–42 mm au-dessus de son repos —
             # un artefact bien plus doux qu'un pushout de contact.
-            "prone_z_min":    0.076,
-            "prone_z_max":    0.09,
+            "prone_z_min": 0.076,
+            "prone_z_max": 0.09,
             # Debout sur roues : ROLLER_STAND_Z = 0.138 (contre 0.11–0.12 sans roues).
             "standing_z_min": 0.134,
             "standing_z_max": 0.144,
@@ -397,18 +398,42 @@ def make_microduck_roller_standup_env_cfg(play: bool = False) -> ManagerBasedRlE
         params={
             "event_name": "set_ground_state",
             "param_stages": [
-                {"step": 0, "params": {
-                    "standing_prob": 0.50, "sitting_prob": 0.00,
-                    "face_down_prob": 0.50, "face_up_prob": 0.00}},
-                {"step": 600 * NUM_STEPS_PER_ENV, "params": {
-                    "standing_prob": 0.35, "sitting_prob": 0.00,
-                    "face_down_prob": 0.45, "face_up_prob": 0.20}},
-                {"step": 1500 * NUM_STEPS_PER_ENV, "params": {
-                    "standing_prob": 0.25, "sitting_prob": 0.00,
-                    "face_down_prob": 0.40, "face_up_prob": 0.35}},
-                {"step": 2500 * NUM_STEPS_PER_ENV, "params": {
-                    "standing_prob": 0.20, "sitting_prob": 0.00,
-                    "face_down_prob": 0.40, "face_up_prob": 0.40}},
+                {
+                    "step": 0,
+                    "params": {
+                        "standing_prob": 0.50,
+                        "sitting_prob": 0.00,
+                        "face_down_prob": 0.50,
+                        "face_up_prob": 0.00,
+                    },
+                },
+                {
+                    "step": 600 * NUM_STEPS_PER_ENV,
+                    "params": {
+                        "standing_prob": 0.35,
+                        "sitting_prob": 0.00,
+                        "face_down_prob": 0.45,
+                        "face_up_prob": 0.20,
+                    },
+                },
+                {
+                    "step": 1500 * NUM_STEPS_PER_ENV,
+                    "params": {
+                        "standing_prob": 0.25,
+                        "sitting_prob": 0.00,
+                        "face_down_prob": 0.40,
+                        "face_up_prob": 0.35,
+                    },
+                },
+                {
+                    "step": 2500 * NUM_STEPS_PER_ENV,
+                    "params": {
+                        "standing_prob": 0.20,
+                        "sitting_prob": 0.00,
+                        "face_down_prob": 0.40,
+                        "face_up_prob": 0.40,
+                    },
+                },
             ],
         },
     )
@@ -422,12 +447,14 @@ def make_microduck_roller_standup_env_cfg(play: bool = False) -> ManagerBasedRlE
         play_face_up = _resolve_play_face_up()
         if play_face_up is not None:
             remainder = 1.0 - play_face_up
-            cfg.events["set_ground_state"].params.update({
-                "face_up_prob":    play_face_up,
-                "face_down_prob":  remainder * _PLAY_FACE_DOWN_SHARE,
-                "standing_prob":   remainder * (1.0 - _PLAY_FACE_DOWN_SHARE),
-                "sitting_prob":    0.00,
-            })
+            cfg.events["set_ground_state"].params.update(
+                {
+                    "face_up_prob": play_face_up,
+                    "face_down_prob": remainder * _PLAY_FACE_DOWN_SHARE,
+                    "standing_prob": remainder * (1.0 - _PLAY_FACE_DOWN_SHARE),
+                    "sitting_prob": 0.00,
+                }
+            )
             del cfg.curriculum["ground_state_mix"]
 
     # ── Friction de roulement INVERSÉE : freinées → libres ───────────────────
@@ -452,7 +479,7 @@ def make_microduck_roller_standup_env_cfg(play: bool = False) -> ManagerBasedRlE
         params={
             "event_name": "randomize_wheel_friction",
             "ranges_stages": [
-                {"step": 0,                        "ranges": _WHEEL_FRICTION_STAGE0},
+                {"step": 0, "ranges": _WHEEL_FRICTION_STAGE0},
                 {"step": 1000 * NUM_STEPS_PER_ENV, "ranges": (0.0200, 0.0200)},
                 {"step": 2000 * NUM_STEPS_PER_ENV, "ranges": (0.0080, 0.0080)},
                 {"step": 3000 * NUM_STEPS_PER_ENV, "ranges": (0.0030, 0.0030)},
@@ -479,7 +506,7 @@ def make_microduck_roller_standup_env_cfg(play: bool = False) -> ManagerBasedRlE
         params={
             "reward_name": "action_rate_l2",
             "weight_stages": [
-                {"step": 0,                       "weight": -0.4},
+                {"step": 0, "weight": -0.4},
                 {"step": 250 * NUM_STEPS_PER_ENV, "weight": -0.8},
                 {"step": 500 * NUM_STEPS_PER_ENV, "weight": -1.0},
             ],
@@ -495,12 +522,15 @@ def make_microduck_roller_standup_env_cfg(play: bool = False) -> ManagerBasedRlE
         params={
             "event_name": "push_robot",
             "push_stages": [
-                {"step": 0, "velocity_range": {
-                    "x": (0.0, 0.0), "y": (0.0, 0.0)}},
-                {"step": 500 * NUM_STEPS_PER_ENV, "velocity_range": {
-                    "x": (-0.08, 0.08), "y": (-0.08, 0.08)}},
-                {"step": 1000 * NUM_STEPS_PER_ENV, "velocity_range": {
-                    "x": (-0.2, 0.2), "y": (-0.2, 0.2)}},
+                {"step": 0, "velocity_range": {"x": (0.0, 0.0), "y": (0.0, 0.0)}},
+                {
+                    "step": 500 * NUM_STEPS_PER_ENV,
+                    "velocity_range": {"x": (-0.08, 0.08), "y": (-0.08, 0.08)},
+                },
+                {
+                    "step": 1000 * NUM_STEPS_PER_ENV,
+                    "velocity_range": {"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
+                },
             ],
         },
     )

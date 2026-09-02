@@ -1,9 +1,9 @@
 """Shared wandb helpers for play_latest and export_latest scripts."""
 
-import os
 import subprocess
 import sys
 from datetime import datetime
+from pathlib import Path
 
 import wandb
 
@@ -22,8 +22,9 @@ def find_latest_run(user_filter: str) -> wandb.apis.public.Run | None:
 
 
 def find_latest_runs(user_filter, task_match, n):
-    """Return up to *n* most recent runs whose metadata email contains
-    *user_filter* and whose task_id (metadata args[0]) satisfies *task_match*.
+    """Return up to *n* most recent runs whose metadata email contains *user_filter* and whose task_id (metadata args[0]).
+
+    satisfies *task_match*.
 
     task_match: Callable[[str], bool] applied to the wandb task_id string.
     Ordered most-recent first.
@@ -74,9 +75,7 @@ def print_run_info(run: wandb.apis.public.Run) -> dict:
     ]
     reward_items.sort(key=lambda x: abs(x[1]), reverse=True)
 
-    checkpoints = sorted(
-        [f.name for f in run.files() if f.name.startswith("model_") and f.name.endswith(".pt")]
-    )
+    checkpoints = sorted([f.name for f in run.files() if f.name.startswith("model_") and f.name.endswith(".pt")])
     last_ckpt = checkpoints[-1] if checkpoints else "none"
 
     created = datetime.fromisoformat(run.created_at.replace("Z", "+00:00"))
@@ -108,8 +107,10 @@ def print_run_info(run: wandb.apis.public.Run) -> dict:
 
 
 def resolve_run(user: str, task_substr: str | None = None) -> tuple[wandb.apis.public.Run, dict]:
-    """Find latest run for user (optionally filtered to a task-id substring),
-    print info, return (run, info). Exits on failure."""
+    """Find latest run for user (optionally filtered to a task-id substring), print info, return (run, info).
+
+    Exits on failure.
+    """
     if task_substr:
         print(f"Searching latest '{task_substr}' run for user '{user}'...")
         runs = find_latest_runs(user, lambda t: task_substr.lower() in t.lower(), 1)
@@ -134,5 +135,5 @@ def run_command(cmd: list[str], dry_run: bool) -> None:
     if dry_run:
         print("(dry-run, not executing)")
         return
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    project_root = str(Path(__file__).resolve().parent.parent)
     subprocess.run(cmd, cwd=project_root)

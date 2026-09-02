@@ -1,34 +1,33 @@
 #!/usr/bin/env python3
-"""
-Plot comparison between real and simulated observations using Plotly.
-"""
+"""Plot comparison between real and simulated observations using Plotly."""
 
 import argparse
 import pickle
+from pathlib import Path
+
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from pathlib import Path
 
 
 def load_observations(pkl_path: str):
     """Load observations from pickle file."""
-    with open(pkl_path, 'rb') as f:
+    with Path(pkl_path).open("rb") as f:
         data = pickle.load(f)
 
     if isinstance(data, dict):
-        if 'observations' in data and 'timestamps' in data:
-            observations = data['observations']
-            timestamps = data['timestamps']
+        if "observations" in data and "timestamps" in data:
+            observations = data["observations"]
+            timestamps = data["timestamps"]
         else:
             raise ValueError("Dictionary must contain 'observations' and 'timestamps' keys")
     elif isinstance(data, list):
         if len(data) == 0:
             raise ValueError("Empty data list")
 
-        if isinstance(data[0], dict) and 'timestamp' in data[0] and 'observation' in data[0]:
-            timestamps = [item['timestamp'] for item in data]
-            observations = [item['observation'] for item in data]
+        if isinstance(data[0], dict) and "timestamp" in data[0] and "observation" in data[0]:
+            timestamps = [item["timestamp"] for item in data]
+            observations = [item["observation"] for item in data]
         elif isinstance(data[0], tuple):
             timestamps = [item[0] for item in data]
             observations = [item[1] for item in data]
@@ -42,16 +41,26 @@ def load_observations(pkl_path: str):
 
 
 def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
-    """
-    Plot comparison between real and simulated observations using Plotly.
+    """Plot comparison between real and simulated observations using Plotly.
+
     If sim_obs is None, only plots real data.
     """
-
     # Joint names
     joint_names = [
-        'L_hip_yaw', 'L_hip_roll', 'L_hip_pitch', 'L_knee', 'L_ankle',
-        'neck_pitch', 'head_pitch', 'head_yaw', 'head_roll',
-        'R_hip_yaw', 'R_hip_roll', 'R_hip_pitch', 'R_knee', 'R_ankle'
+        "L_hip_yaw",
+        "L_hip_roll",
+        "L_hip_pitch",
+        "L_knee",
+        "L_ankle",
+        "neck_pitch",
+        "head_pitch",
+        "head_yaw",
+        "head_roll",
+        "R_hip_yaw",
+        "R_hip_roll",
+        "R_hip_pitch",
+        "R_knee",
+        "R_ankle",
     ]
 
     obs_dim = real_obs.shape[1] if sim_obs is None else min(real_obs.shape[1], sim_obs.shape[1])
@@ -67,54 +76,64 @@ def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
     subplot_titles = []
 
     # Base angular velocity (3)
-    subplot_titles.extend(['<b>BASE ANG VEL</b><br>ω_x', 'ω_y', 'ω_z', ''])
+    subplot_titles.extend(["<b>BASE ANG VEL</b><br>ω_x", "ω_y", "ω_z", ""])
 
     # Raw accelero (3)
-    subplot_titles.extend(['<b>Raw Accelero</b><br>g_x', 'g_y', 'g_z', ''])
+    subplot_titles.extend(["<b>Raw Accelero</b><br>g_x", "g_y", "g_z", ""])
 
     # Joint positions (14 + 2 empty)
-    subplot_titles.append(f'<b>JOINT POSITIONS</b><br>{joint_names[0]}')
+    subplot_titles.append(f"<b>JOINT POSITIONS</b><br>{joint_names[0]}")
     subplot_titles.extend(joint_names[1:14])
-    subplot_titles.extend(['', ''])
+    subplot_titles.extend(["", ""])
 
     # Joint velocities (14 + 2 empty)
-    subplot_titles.append(f'<b>JOINT VELOCITIES</b><br>{joint_names[0]}')
+    subplot_titles.append(f"<b>JOINT VELOCITIES</b><br>{joint_names[0]}")
     subplot_titles.extend(joint_names[1:14])
-    subplot_titles.extend(['', ''])
+    subplot_titles.extend(["", ""])
 
     # Actions (14 + 2 empty)
-    subplot_titles.append(f'<b>ACTIONS</b><br>{joint_names[0]}')
+    subplot_titles.append(f"<b>ACTIONS</b><br>{joint_names[0]}")
     subplot_titles.extend(joint_names[1:14])
-    subplot_titles.extend(['', ''])
+    subplot_titles.extend(["", ""])
 
     num_rows = 14
     fig = make_subplots(
-        rows=num_rows, cols=4,
+        rows=num_rows,
+        cols=4,
         subplot_titles=subplot_titles,
         vertical_spacing=0.02,
         horizontal_spacing=0.05,
-        row_heights=[1]*num_rows,
+        row_heights=[1] * num_rows,
     )
 
     plot_idx = 0
 
     # Track data for common scaling
-    command_data = []
 
     def add_traces(row, col, real_data, sim_data=None, y_range=None):
         """Helper to add real and sim traces to a subplot."""
         fig.add_trace(
-            go.Scatter(x=real_ts, y=real_data, name='Real',
-                      line=dict(color='blue', width=1.5),
-                      showlegend=(plot_idx == 0)),
-            row=row, col=col
+            go.Scatter(
+                x=real_ts,
+                y=real_data,
+                name="Real",
+                line={"color": "blue", "width": 1.5},
+                showlegend=(plot_idx == 0),
+            ),
+            row=row,
+            col=col,
         )
         if sim_data is not None:
             fig.add_trace(
-                go.Scatter(x=sim_ts, y=sim_data, name='Sim',
-                          line=dict(color='red', width=1.5, dash='dash'),
-                          showlegend=(plot_idx == 0)),
-                row=row, col=col
+                go.Scatter(
+                    x=sim_ts,
+                    y=sim_data,
+                    name="Sim",
+                    line={"color": "red", "width": 1.5, "dash": "dash"},
+                    showlegend=(plot_idx == 0),
+                ),
+                row=row,
+                col=col,
             )
         if y_range:
             fig.update_yaxes(range=y_range, row=row, col=col)
@@ -130,11 +149,16 @@ def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
         row, col = divmod(plot_idx, 4)
         row += 1
         col += 1
-        base_ang_vel_data.append(real_obs[:, base_ang_vel_start+i])
+        base_ang_vel_data.append(real_obs[:, base_ang_vel_start + i])
         if sim_obs is not None:
-            base_ang_vel_data.append(sim_obs[:, base_ang_vel_start+i])
-        add_traces(row, col, real_obs[:, base_ang_vel_start+i], None if sim_obs is None else sim_obs[:, base_ang_vel_start+i])
-        fig.update_yaxes(title_text='rad/s', row=row, col=col)
+            base_ang_vel_data.append(sim_obs[:, base_ang_vel_start + i])
+        add_traces(
+            row,
+            col,
+            real_obs[:, base_ang_vel_start + i],
+            None if sim_obs is None else sim_obs[:, base_ang_vel_start + i],
+        )
+        fig.update_yaxes(title_text="rad/s", row=row, col=col)
         plot_idx += 1
 
     # Empty slot
@@ -145,11 +169,16 @@ def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
         row, col = divmod(plot_idx, 4)
         row += 1
         col += 1
-        gravity_data.append(real_obs[:, gravity_start+i])
+        gravity_data.append(real_obs[:, gravity_start + i])
         if sim_obs is not None:
-            gravity_data.append(sim_obs[:, gravity_start+i])
-        add_traces(row, col, real_obs[:, gravity_start+i], None if sim_obs is None else sim_obs[:, gravity_start+i])
-        fig.update_yaxes(title_text='g', row=row, col=col)
+            gravity_data.append(sim_obs[:, gravity_start + i])
+        add_traces(
+            row,
+            col,
+            real_obs[:, gravity_start + i],
+            None if sim_obs is None else sim_obs[:, gravity_start + i],
+        )
+        fig.update_yaxes(title_text="g", row=row, col=col)
         plot_idx += 1
 
     # Empty slot
@@ -161,11 +190,16 @@ def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
         row += 1
         col += 1
         if joint_pos_start + i < obs_dim:
-            joint_pos_data.append(real_obs[:, joint_pos_start+i])
+            joint_pos_data.append(real_obs[:, joint_pos_start + i])
             if sim_obs is not None:
-                joint_pos_data.append(sim_obs[:, joint_pos_start+i])
-            add_traces(row, col, real_obs[:, joint_pos_start+i], None if sim_obs is None else sim_obs[:, joint_pos_start+i])
-        fig.update_yaxes(title_text='rad', row=row, col=col)
+                joint_pos_data.append(sim_obs[:, joint_pos_start + i])
+            add_traces(
+                row,
+                col,
+                real_obs[:, joint_pos_start + i],
+                None if sim_obs is None else sim_obs[:, joint_pos_start + i],
+            )
+        fig.update_yaxes(title_text="rad", row=row, col=col)
         plot_idx += 1
 
     # Skip 2 empty slots
@@ -177,11 +211,16 @@ def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
         row += 1
         col += 1
         if joint_vel_start + i < obs_dim:
-            joint_vel_data.append(real_obs[:, joint_vel_start+i])
+            joint_vel_data.append(real_obs[:, joint_vel_start + i])
             if sim_obs is not None:
-                joint_vel_data.append(sim_obs[:, joint_vel_start+i])
-            add_traces(row, col, real_obs[:, joint_vel_start+i], None if sim_obs is None else sim_obs[:, joint_vel_start+i])
-        fig.update_yaxes(title_text='rad/s', row=row, col=col)
+                joint_vel_data.append(sim_obs[:, joint_vel_start + i])
+            add_traces(
+                row,
+                col,
+                real_obs[:, joint_vel_start + i],
+                None if sim_obs is None else sim_obs[:, joint_vel_start + i],
+            )
+        fig.update_yaxes(title_text="rad/s", row=row, col=col)
         plot_idx += 1
 
     # Skip 2 empty slots
@@ -193,12 +232,17 @@ def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
         row += 1
         col += 1
         if action_start + i < obs_dim:
-            action_data.append(real_obs[:, action_start+i])
+            action_data.append(real_obs[:, action_start + i])
             if sim_obs is not None:
-                action_data.append(sim_obs[:, action_start+i])
-            add_traces(row, col, real_obs[:, action_start+i], None if sim_obs is None else sim_obs[:, action_start+i])
-        fig.update_yaxes(title_text='action', row=row, col=col)
-        fig.update_xaxes(title_text='Time (s)', row=row, col=col)
+                action_data.append(sim_obs[:, action_start + i])
+            add_traces(
+                row,
+                col,
+                real_obs[:, action_start + i],
+                None if sim_obs is None else sim_obs[:, action_start + i],
+            )
+        fig.update_yaxes(title_text="action", row=row, col=col)
+        fig.update_xaxes(title_text="Time (s)", row=row, col=col)
         plot_idx += 1
 
     # Set common y-ranges for each group
@@ -219,37 +263,37 @@ def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
     # Apply common ranges
     plot_idx = 0
 
-    for i in range(3):  # Base ang vel
+    for _ in range(3):  # Base ang vel
         row, col = divmod(plot_idx, 4)
-        fig.update_yaxes(range=base_ang_vel_range, row=row+1, col=col+1)
+        fig.update_yaxes(range=base_ang_vel_range, row=row + 1, col=col + 1)
         plot_idx += 1
     plot_idx += 1
 
-    for i in range(3):  # Gravity
+    for _ in range(3):  # Gravity
         row, col = divmod(plot_idx, 4)
-        fig.update_yaxes(range=gravity_range, row=row+1, col=col+1)
+        fig.update_yaxes(range=gravity_range, row=row + 1, col=col + 1)
         plot_idx += 1
     plot_idx += 1
 
-    for i in range(14):  # Joint pos
+    for _ in range(14):  # Joint pos
         row, col = divmod(plot_idx, 4)
-        fig.update_yaxes(range=joint_pos_range, row=row+1, col=col+1)
+        fig.update_yaxes(range=joint_pos_range, row=row + 1, col=col + 1)
         plot_idx += 1
     plot_idx += 2
 
-    for i in range(14):  # Joint vel
+    for _ in range(14):  # Joint vel
         row, col = divmod(plot_idx, 4)
-        fig.update_yaxes(range=joint_vel_range, row=row+1, col=col+1)
+        fig.update_yaxes(range=joint_vel_range, row=row + 1, col=col + 1)
         plot_idx += 1
     plot_idx += 2
 
-    for i in range(14):  # Actions
+    for _ in range(14):  # Actions
         row, col = divmod(plot_idx, 4)
-        fig.update_yaxes(range=action_range, row=row+1, col=col+1)
+        fig.update_yaxes(range=action_range, row=row + 1, col=col + 1)
         plot_idx += 1
 
     # Update layout
-    title = 'Real vs Simulated Observations Comparison' if sim_obs is not None else 'Real Robot Observations'
+    title = "Real vs Simulated Observations Comparison" if sim_obs is not None else "Real Robot Observations"
 
     fig.update_layout(
         title_text=title,
@@ -257,21 +301,24 @@ def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
         height=4600,
         width=1600,
         showlegend=True,
-        legend=dict(x=0.85, y=0.99, bgcolor='rgba(255,255,255,0.8)'),
-        hovermode='x unified'
+        legend={"x": 0.85, "y": 0.99, "bgcolor": "rgba(255,255,255,0.8)"},
+        hovermode="x unified",
     )
 
     fig.show()
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Compare real and simulated observations (Plotly version)"
+    """Compare real and simulated observations with interactive Plotly plots."""
+    parser = argparse.ArgumentParser(description="Compare real and simulated observations (Plotly version)")
+    parser.add_argument("real_pkl", type=str, help="Path to .pkl file with real robot observations")
+    parser.add_argument(
+        "sim_pkl",
+        type=str,
+        nargs="?",
+        default=None,
+        help="Path to .pkl file with simulated observations (optional)",
     )
-    parser.add_argument("real_pkl", type=str,
-                       help="Path to .pkl file with real robot observations")
-    parser.add_argument("sim_pkl", type=str, nargs='?', default=None,
-                       help="Path to .pkl file with simulated observations (optional)")
     args = parser.parse_args()
 
     # Check if files exist
@@ -296,7 +343,7 @@ def main():
         sim_obs, sim_ts = None, None
 
     # Plot comparison
-    print(f"\nGenerating interactive comparison plots...")
+    print("\nGenerating interactive comparison plots...")
     plot_comparison(real_obs, real_ts, sim_obs, sim_ts)
 
     return 0

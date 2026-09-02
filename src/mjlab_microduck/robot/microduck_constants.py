@@ -1,17 +1,17 @@
-import os
+"""Microduck robot entity configs, MJCF paths, and BAM actuator cfgs."""
+
 from pathlib import Path
 
 import mujoco
-from mjlab.actuator import XmlActuatorCfg
+from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
+from mjlab.utils.spec_config import CollisionCfg
+
 from mjlab_microduck.actuator import (
     BacklashEncoderBamActuatorCfg,
     FrictionDRBamActuatorCfg,
 )
-from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
-from mjlab.utils.spec_config import CollisionCfg
 
-
-_ROBOT_DIR: Path = Path(os.path.dirname(__file__)) / "microduck"
+_ROBOT_DIR: Path = Path(__file__).parent / "microduck"
 
 MICRODUCK_WALK_XML: Path = _ROBOT_DIR / "robot_walk.xml"
 # Full-collision model, shared by standup / ground-pick / walk-rollers tasks.
@@ -33,40 +33,50 @@ assert MICRODUCK_BALL_XML.exists(), f"XML not found: {MICRODUCK_BALL_XML}"
 assert MICRODUCK_ALLCOLLISIONS_ROLLERS_XML.exists(), f"XML not found: {MICRODUCK_ALLCOLLISIONS_ROLLERS_XML}"
 assert MICRODUCK_ALLCOLLISIONS_BACKLASH_XML.exists(), f"XML not found: {MICRODUCK_ALLCOLLISIONS_BACKLASH_XML}"
 assert MICRODUCK_WALK_BACKLASH_XML.exists(), f"XML not found: {MICRODUCK_WALK_BACKLASH_XML}"
-assert MICRODUCK_ALLCOLLISIONS_ROLLERS_BACKLASH_XML.exists(), f"XML not found: {MICRODUCK_ALLCOLLISIONS_ROLLERS_BACKLASH_XML}"
+assert MICRODUCK_ALLCOLLISIONS_ROLLERS_BACKLASH_XML.exists(), (
+    f"XML not found: {MICRODUCK_ALLCOLLISIONS_ROLLERS_BACKLASH_XML}"
+)
 
 
 def get_walk_spec() -> mujoco.MjSpec:
+    """Load the walk model MJCF as an MjSpec."""
     return mujoco.MjSpec.from_file(str(MICRODUCK_WALK_XML))
 
 
 def get_standup_spec() -> mujoco.MjSpec:
+    """Load the full-collision standup model MJCF as an MjSpec."""
     return mujoco.MjSpec.from_file(str(MICRODUCK_ALLCOLLISIONS_XML))
 
 
 def get_ground_pick_spec() -> mujoco.MjSpec:
+    """Load the ground-pick (full-collision) model MJCF as an MjSpec."""
     return mujoco.MjSpec.from_file(str(MICRODUCK_ALLCOLLISIONS_XML))
 
 
 def get_walk_rollers_spec() -> mujoco.MjSpec:
+    """Load the roller-skate walk model MJCF as an MjSpec."""
     # NOTE: was loading robot_allcollisions.xml (no wheels) — the roller env
     # silently ran on the wheel-less standup model.
     return mujoco.MjSpec.from_file(str(MICRODUCK_ALLCOLLISIONS_ROLLERS_XML))
 
 
 def get_ball_spec() -> mujoco.MjSpec:
+    """Load the ball prop MJCF as an MjSpec."""
     return mujoco.MjSpec.from_file(str(MICRODUCK_BALL_XML))
 
 
 def get_backlash_spec() -> mujoco.MjSpec:
+    """Load the full-collision backlash model MJCF as an MjSpec."""
     return mujoco.MjSpec.from_file(str(MICRODUCK_ALLCOLLISIONS_BACKLASH_XML))
 
 
 def get_walk_backlash_spec() -> mujoco.MjSpec:
+    """Load the walk backlash model MJCF as an MjSpec."""
     return mujoco.MjSpec.from_file(str(MICRODUCK_WALK_BACKLASH_XML))
 
 
 def get_rollers_backlash_spec() -> mujoco.MjSpec:
+    """Load the roller-skate backlash model MJCF as an MjSpec."""
     return mujoco.MjSpec.from_file(str(MICRODUCK_ALLCOLLISIONS_ROLLERS_BACKLASH_XML))
 
 
@@ -105,9 +115,9 @@ FULL_COLLISION = CollisionCfg(
 
 # -- Old actuator (XML position, MuJoCo built-in PD + friction) --
 # actuators = DelayedActuatorCfg(
-    # delay_min_lag=0,
-    # delay_max_lag=3,
-    # base_cfg=XmlPositionActuatorCfg(joint_names_expr=(r".*",)),
+# delay_min_lag=0,
+# delay_max_lag=3,
+# base_cfg=XmlPositionActuatorCfg(joint_names_expr=(r".*",)),
 # )
 
 # -- BAM M6 actuator (full voltage control + load-dependent friction) --
@@ -117,19 +127,19 @@ FULL_COLLISION = CollisionCfg(
 #   - vin_drop_gain_range: load-dependent voltage sag V_drop = gain * sum(|tau|)
 #   - vin_min: hard floor on the effective voltage after sag
 # kp_fw kept at 200 (microduck's preserved firmware stiffness; microban uses 125).
-_BAM_ACTUATOR_KWARGS = dict(
-    motor_name="xl330",
-    model="m6",
-    target_names_expr=(r"^(?!passive_).*",),
-    kp_fw=200.0,  # microduck's preserved firmware stiffness (microban uses 125)
+_BAM_ACTUATOR_KWARGS = {
+    "motor_name": "xl330",
+    "model": "m6",
+    "target_names_expr": (r"^(?!passive_).*",),
+    "kp_fw": 200.0,  # microduck's preserved firmware stiffness (microban uses 125)
     # vin_range=(6.9, 7.9),
-    vin_range=(6.5, 8.2),
-    vin_drop_gain_range=(0.0, 0.2),
-    vin_min=6.0,
+    "vin_range": (6.5, 8.2),
+    "vin_drop_gain_range": (0.0, 0.2),
+    "vin_min": 6.0,
     # max_current=1.75,
-    delay_min_lag=3,
-    delay_max_lag=6,
-)
+    "delay_min_lag": 3,
+    "delay_max_lag": 6,
+}
 actuators = FrictionDRBamActuatorCfg(**_BAM_ACTUATOR_KWARGS)
 
 # Same BAM actuator, but the firmware position loop reads the encoder THROUGH
@@ -140,9 +150,9 @@ backlash_actuators = BacklashEncoderBamActuatorCfg(**_BAM_ACTUATOR_KWARGS)
 
 # -- BAM M4 actuator
 # actuators = DelayedActuatorCfg(
-    # delay_min_lag=0,
-    # delay_max_lag=3,
-    # base_cfg=make_bam_m4_actuator_cfg(),
+# delay_min_lag=0,
+# delay_max_lag=3,
+# base_cfg=make_bam_m4_actuator_cfg(),
 # )
 
 # HOME frame for the backlash model. HOME_FRAME's unanchored patterns

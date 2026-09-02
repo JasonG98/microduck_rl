@@ -28,16 +28,16 @@ from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
+
 from mjlab_microduck.robot.testbench_constants import (
     TESTBENCH_ARM_MASS,
     TESTBENCH_XML,
     _set_arm_mass,
 )
 
-
 # --- Match training env ---
-CONTROL_DT = 0.02   # decimation=4 × timestep=0.005  (policy rate = 50 Hz)
-SIM_DT = 0.005      # (logging rate  = 200 Hz — one sample per inner sim step)
+CONTROL_DT = 0.02  # decimation=4 × timestep=0.005  (policy rate = 50 Hz)
+SIM_DT = 0.005  # (logging rate  = 200 Hz — one sample per inner sim step)
 LOG_DT = SIM_DT
 DEFAULT_POS = 0.0
 MAX_ANGLE = math.radians(80.0)
@@ -72,7 +72,10 @@ def make_target_schedule(
 
 
 class PolicyRunner:
+    """Loads an ONNX policy and steps it against the testbench obs layout."""
+
     def __init__(self, onnx_path: str, action_scale: float = 1.0):
+        """Initialize the runner by loading the ONNX session."""
         print(f"Loading policy: {onnx_path}  (action_scale={action_scale})")
         self.session = ort.InferenceSession(onnx_path)
         self.in_name = self.session.get_inputs()[0].name
@@ -82,9 +85,11 @@ class PolicyRunner:
         self.last_action = np.zeros(1, dtype=np.float32)
 
     def reset(self):
+        """Reset the runner's last-action buffer to zero."""
         self.last_action[:] = 0.0
 
     def step(self, q: float, qd: float, target: float) -> float:
+        """Run the policy for one step and return the resulting goal position."""
         # Matches the testbench env's policy obs layout:
         #   [joint_pos_rel, joint_vel_rel, last_action, command]  (4-d).
         obs = np.array(
@@ -107,17 +112,17 @@ def rollout_sim_bam(onnx_path: str, total_time: float, seed: int, action_scale: 
     Pros: 200 Hz inner-step logging, no torch/mjwarp.  Cons: not the exact
     actuator that was trained against (uses bam upstream, not mjlab's M6).
     """
-    import mujoco  # local import so --mode real works without mujoco
-
-    from bam.actuators import actuators as bam_actuators
-    from bam.model import models as bam_models
-    from bam.mujoco import MujocoController
-
     # Load the fitted XL330 m6 params from the canonical bam bundle (identical to
     # the values that used to live in mjlab_microduck.actuator.bam_params).
     import json as _json
+
+    import mujoco  # local import so --mode real works without mujoco
+    from bam.actuators import actuators as bam_actuators
     from bam.model import _resolve_json_path
-    with open(_resolve_json_path(None, "xl330", "m6")) as _f:
+    from bam.model import models as bam_models
+    from bam.mujoco import MujocoController
+
+    with Path(_resolve_json_path(None, "xl330", "m6")).open() as _f:
         DEFAULT_XL330_M6 = _json.load(_f)
 
     VIN = 7.4
@@ -175,12 +180,11 @@ def rollout_sim_bam(onnx_path: str, total_time: float, seed: int, action_scale: 
 
     # Logging at SIM_DT (200 Hz): decim samples per policy step.
     N_log = len(policy_targets) * decim
-    rec = {k: np.zeros(N_log, dtype=np.float32)
-           for k in ("t", "target", "q", "qd", "action", "ctrl")}
+    rec = {k: np.zeros(N_log, dtype=np.float32) for k in ("t", "target", "q", "qd", "action", "ctrl")}
 
     t = 0.0
     log_i = 0
-    for policy_i, target in enumerate(policy_targets):
+    for _policy_i, target in enumerate(policy_targets):
         q = float(data.qpos[qpos_id])
         qd = float(data.qvel[dof_id])
         goal = runner.step(q, qd, float(target))
@@ -213,14 +217,11 @@ def rollout_sim_bam(onnx_path: str, total_time: float, seed: int, action_scale: 
 def rollout_sim_mjlab(onnx_path: str, total_time: float, seed: int, action_scale: float) -> dict:
     """Sim rollout via the actual mjlab testbench env (same BAM M6 the policy was trained against).
 
-    Boots make_testbench_env_cfg() with num_envs=1, overrides the target_angle
-    command with our deterministic schedule each policy tick, and steps the env
-    with the policy action.  We replicate ManagerBasedRlEnv.step's inner
-    decimation loop manually so we can log q/qd at SIM_DT (200 Hz) between
-    sub-steps, matching the bam backend's logging rate.
+    Boots make_testbench_env_cfg() with num_envs=1, overrides the target_angle command with our deterministic schedule
+    each policy tick, and steps the env with the policy action.  We replicate ManagerBasedRlEnv.step's inner decimation
+    loop manually so we can log q/qd at SIM_DT (200 Hz) between sub-steps, matching the bam backend's logging rate.
     """
     import torch
-
     from mjlab.envs import ManagerBasedRlEnv
 
     from mjlab_microduck.tasks.testbench_env_cfg import make_testbench_env_cfg
@@ -247,8 +248,7 @@ def rollout_sim_mjlab(onnx_path: str, total_time: float, seed: int, action_scale
     decim = env.cfg.decimation
     physics_dt = env.physics_dt
     N_log = len(policy_targets) * decim
-    rec = {k: np.zeros(N_log, dtype=np.float32)
-           for k in ("t", "target", "q", "qd", "action", "ctrl")}
+    rec = {k: np.zeros(N_log, dtype=np.float32) for k in ("t", "target", "q", "qd", "action", "ctrl")}
 
     t = 0.0
     log_i = 0
@@ -306,6 +306,7 @@ def rollout_real(
     kp: int,
     action_scale: float,
 ) -> dict:
+    """Roll out the ONNX policy on a real XL330 motor with a target schedule."""
     from rustypot import Xl330PyController
 
     ctrl = Xl330PyController(port, baudrate, 0.05)
@@ -332,8 +333,7 @@ def rollout_real(
 
     decim = int(round(CONTROL_DT / LOG_DT))  # samples per policy tick (4 at 200 Hz / 50 Hz)
     N_log = len(policy_targets) * decim
-    rec = {k: np.zeros(N_log, dtype=np.float32)
-           for k in ("t", "target", "q", "qd", "action", "ctrl")}
+    rec = {k: np.zeros(N_log, dtype=np.float32) for k in ("t", "target", "q", "qd", "action", "ctrl")}
 
     def _scalar(x) -> float:
         if isinstance(x, (list, tuple)):
@@ -396,7 +396,7 @@ def rollout_real(
         new_segment = policy_i == 0 or policy_targets[policy_i] != policy_targets[policy_i - 1]
         if new_segment or policy_i % 25 == 0:
             print(
-                f"\r  t={rec['t'][log_i-1]:6.2f}s  target={math.degrees(target_f):+6.1f}°  "
+                f"\r  t={rec['t'][log_i - 1]:6.2f}s  target={math.degrees(target_f):+6.1f}°  "
                 f"q={math.degrees(q):+6.1f}°  err={math.degrees(q - target_f):+6.1f}°  "
                 f"goal={math.degrees(goal):+6.1f}°",
                 end="" if not new_segment else "\n",
@@ -423,8 +423,7 @@ def _mae(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.mean(np.abs(a[:n] - b[:n])))
 
 
-def npz_to_bam_log(npz_path: str, json_path: str, *, mass: float, length: float,
-                   kp: int, vin: float) -> None:
+def npz_to_bam_log(npz_path: str, json_path: str, *, mass: float, length: float, kp: int, vin: float) -> None:
     """Convert a rollout .npz (written by rollout_sim/rollout_real) to a BAM log json.
 
     BAM log format (see ~/Rhoban/bam/bam/logs.py):
@@ -442,16 +441,18 @@ def npz_to_bam_log(npz_path: str, json_path: str, *, mass: float, length: float,
 
     entries = []
     for i in range(len(t)):
-        entries.append({
-            "position": float(d["q"][i]),
-            "speed": float(d["qd"][i]),
-            "load": 0.0,
-            "input_volts": vin,
-            "temp": 25.0,
-            "goal_position": float(d["ctrl"][i]),
-            "torque_enable": True,
-            "timestamp": float(t[i]),
-        })
+        entries.append(
+            {
+                "position": float(d["q"][i]),
+                "speed": float(d["qd"][i]),
+                "load": 0.0,
+                "input_volts": vin,
+                "temp": 25.0,
+                "goal_position": float(d["ctrl"][i]),
+                "torque_enable": True,
+                "timestamp": float(t[i]),
+            }
+        )
 
     log = {
         "mass": mass,
@@ -466,13 +467,14 @@ def npz_to_bam_log(npz_path: str, json_path: str, *, mass: float, length: float,
 
     out = Path(json_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    with open(out, "w") as f:
+    with out.open("w") as f:
         json.dump(log, f)
     print(f"Wrote BAM log: {out} ({len(entries)} entries, dt={dt:.4f}s, mass={mass}kg, kp={kp})")
     print(f"  Replay with: (cd ~/Rhoban/bam && python -m bam.plot --logdir {out.parent} --actuator xl330)")
 
 
 def compare_and_plot(sim_file: str, real_file: str, out_path: str) -> None:
+    """Compare sim and real rollout logs and save a diagnostic plot."""
     import matplotlib.pyplot as plt
 
     sim = dict(np.load(sim_file))
@@ -485,14 +487,19 @@ def compare_and_plot(sim_file: str, real_file: str, out_path: str) -> None:
 
     print("\n=== Analytics ===")
     print(f"  steps compared       : {n}")
-    print(f"  MAE q (sim vs real)  : {_mae(sim['q'], real['q']):.4f} rad "
-          f"({math.degrees(_mae(sim['q'], real['q'])):.2f}°)")
-    print(f"  sim   tracking MAE   : {float(np.mean(np.abs(err_sim))):.4f} rad "
-          f"({math.degrees(float(np.mean(np.abs(err_sim)))):.2f}°)")
-    print(f"  real  tracking MAE   : {float(np.mean(np.abs(err_real))):.4f} rad "
-          f"({math.degrees(float(np.mean(np.abs(err_real)))):.2f}°)")
-    print(f"  sim   qd RMS         : {float(np.sqrt(np.mean(sim['qd'][:n]**2))):.3f} rad/s")
-    print(f"  real  qd RMS         : {float(np.sqrt(np.mean(real['qd'][:n]**2))):.3f} rad/s")
+    print(
+        f"  MAE q (sim vs real)  : {_mae(sim['q'], real['q']):.4f} rad ({math.degrees(_mae(sim['q'], real['q'])):.2f}°)"
+    )
+    print(
+        f"  sim   tracking MAE   : {float(np.mean(np.abs(err_sim))):.4f} rad "
+        f"({math.degrees(float(np.mean(np.abs(err_sim)))):.2f}°)"
+    )
+    print(
+        f"  real  tracking MAE   : {float(np.mean(np.abs(err_real))):.4f} rad "
+        f"({math.degrees(float(np.mean(np.abs(err_real)))):.2f}°)"
+    )
+    print(f"  sim   qd RMS         : {float(np.sqrt(np.mean(sim['qd'][:n] ** 2))):.3f} rad/s")
+    print(f"  real  qd RMS         : {float(np.sqrt(np.mean(real['qd'][:n] ** 2))):.3f} rad/s")
     print(f"  action MAE           : {_mae(sim['action'], real['action']):.4f} rad")
 
     fig, axes = plt.subplots(4, 1, figsize=(11, 10), sharex=True)
@@ -539,12 +546,17 @@ def compare_and_plot(sim_file: str, real_file: str, out_path: str) -> None:
 
 
 def main():
+    """CLI entrypoint: run sim/real testbench rollouts or compare logs."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["sim", "real"], help="Rollout mode")
-    ap.add_argument("--sim-backend", choices=["bam", "mjlab"], default="bam",
-                    help="Sim backend: 'bam' uses bam.MujocoController on a vanilla "
-                         "mujoco loop (200 Hz log, lightweight); 'mjlab' boots the actual "
-                         "make_testbench_env_cfg() mjlab env with its BamM6Actuator (50 Hz log).")
+    ap.add_argument(
+        "--sim-backend",
+        choices=["bam", "mjlab"],
+        default="bam",
+        help="Sim backend: 'bam' uses bam.MujocoController on a vanilla "
+        "mujoco loop (200 Hz log, lightweight); 'mjlab' boots the actual "
+        "make_testbench_env_cfg() mjlab env with its BamM6Actuator (50 Hz log).",
+    )
     ap.add_argument("--onnx", type=str, help="Path to trained ONNX policy")
     ap.add_argument("--out", type=str, help="Output .npz log file")
     ap.add_argument("--duration", type=float, default=30.0, help="Total time [s]")
@@ -554,17 +566,28 @@ def main():
     ap.add_argument("--motor-id", type=int, default=1)
     ap.add_argument("--baudrate", type=int, default=1_000_000)
     ap.add_argument("--kp", type=int, default=200, help="XL330 position P gain")
-    ap.add_argument("--action-scale", type=float, default=1.0,
-                    help="Multiplier applied to the policy action before offsetting "
-                         "by the default pose (must match training env action scale)")
+    ap.add_argument(
+        "--action-scale",
+        type=float,
+        default=1.0,
+        help="Multiplier applied to the policy action before offsetting "
+        "by the default pose (must match training env action scale)",
+    )
     # compare mode
-    ap.add_argument("--compare", nargs=2, metavar=("SIM_NPZ", "REAL_NPZ"),
-                    help="Plot two logged runs side by side")
+    ap.add_argument(
+        "--compare",
+        nargs=2,
+        metavar=("SIM_NPZ", "REAL_NPZ"),
+        help="Plot two logged runs side by side",
+    )
     ap.add_argument("--out-plot", type=str, default="testbench_sim2real.png")
     # BAM log export
-    ap.add_argument("--to-bam", nargs=2, metavar=("NPZ", "JSON"),
-                    help="Convert a rollout NPZ to BAM log format "
-                         "(run with: python -m bam.plot --logdir <dir> --actuator xl330)")
+    ap.add_argument(
+        "--to-bam",
+        nargs=2,
+        metavar=("NPZ", "JSON"),
+        help="Convert a rollout NPZ to BAM log format (run with: python -m bam.plot --logdir <dir> --actuator xl330)",
+    )
     ap.add_argument("--bam-mass", type=float, default=TESTBENCH_ARM_MASS, help="Payload mass [kg]")
     ap.add_argument("--bam-length", type=float, default=0.1, help="Arm length [m]")
     ap.add_argument("--bam-vin", type=float, default=7.4, help="Supply voltage [V]")
@@ -594,8 +617,13 @@ def main():
         rec = sim_fn(args.onnx, args.duration, args.seed, args.action_scale)
     else:
         rec = rollout_real(
-            args.onnx, args.duration, args.seed,
-            args.port, args.motor_id, args.baudrate, args.kp,
+            args.onnx,
+            args.duration,
+            args.seed,
+            args.port,
+            args.motor_id,
+            args.baudrate,
+            args.kp,
             args.action_scale,
         )
 

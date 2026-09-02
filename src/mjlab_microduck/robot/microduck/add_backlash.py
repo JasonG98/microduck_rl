@@ -30,58 +30,83 @@ import argparse
 import math
 import re
 import sys
+from pathlib import Path
 
-JOINT_RE = re.compile(r'^(\s*)<joint\b[^>]*/>\s*$')
+JOINT_RE = re.compile(r"^(\s*)<joint\b[^>]*/>\s*$")
 ATTR_RE = re.compile(r'(\w+)="([^"]*)"')
 
 
-def build_backlash_default(half_range_rad: float, damping: float,
-                           armature: float, frictionloss: float,
-                           total_deg: float) -> str:
+def build_backlash_default(
+    half_range_rad: float,
+    damping: float,
+    armature: float,
+    frictionloss: float,
+    total_deg: float,
+) -> str:
+    """Build the MJCF ``<default class="backlash">`` block string."""
     return (
         f"  <!-- Backlash injected by add_backlash.py: {total_deg:g} deg total play"
         f" (symmetric +/-{total_deg / 2:g} deg) -->\n"
         f"  <default>\n"
-        f"    <default class=\"backlash\">\n"
+        f'    <default class="backlash">\n'
         f"      <!-- stiff limit constraint: with a range this small the default\n"
         f"           solref (0.02,1) lets the joint overshoot its limits ~2x under\n"
         f"           load. 0.01 = 2*sim_dt (mjlab velocity tasks run dt=0.005),\n"
         f"           the stiffest stable setting; solimp raises the impedance so\n"
         f"           the gear-teeth contact is nearly rigid. -->\n"
-        f"      <joint damping=\"{damping:g}\" frictionloss=\"{frictionloss:g}\""
-        f" armature=\"{armature:g}\" limited=\"true\""
-        f" range=\"{-half_range_rad:.17g} {half_range_rad:.17g}\""
-        f" solreflimit=\"0.01 1\" solimplimit=\"0.95 0.999 0.0001 0.5 2\"/>\n"
+        f'      <joint damping="{damping:g}" frictionloss="{frictionloss:g}"'
+        f' armature="{armature:g}" limited="true"'
+        f' range="{-half_range_rad:.17g} {half_range_rad:.17g}"'
+        f' solreflimit="0.01 1" solimplimit="0.95 0.999 0.0001 0.5 2"/>\n'
         f"    </default>\n"
         f"  </default>\n"
     )
 
 
 def main() -> int:
+    """Inject backlash joints into an MJCF file in place."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("xml", help="MJCF file to modify in place")
-    parser.add_argument("--backlash-deg", type=float, default=2.0,
-                        help="TOTAL backlash play in degrees (peak-to-peak); "
-                             "joint range is symmetric +/-deg/2 (default: 2.0)")
-    parser.add_argument("--damping", type=float, default=0.01,
-                        help="backlash joint damping (default: 0.01)")
-    parser.add_argument("--armature", type=float, default=0.001,
-                        help="backlash joint armature, kept small but non-zero "
-                             "for solver conditioning (default: 0.001)")
-    parser.add_argument("--frictionloss", type=float, default=0.0,
-                        help="backlash joint frictionloss (default: 0)")
-    parser.add_argument("--joint-class", default="chosen_actuator",
-                        help="default class of the joints that get backlash "
-                             "(default: chosen_actuator)")
-    parser.add_argument("--exclude", default=None,
-                        help="optional regex of joint names to skip "
-                             "(e.g. '.*(neck|head).*')")
+    parser.add_argument(
+        "--backlash-deg",
+        type=float,
+        default=2.0,
+        help="TOTAL backlash play in degrees (peak-to-peak); joint range is symmetric +/-deg/2 (default: 2.0)",
+    )
+    parser.add_argument(
+        "--damping",
+        type=float,
+        default=0.01,
+        help="backlash joint damping (default: 0.01)",
+    )
+    parser.add_argument(
+        "--armature",
+        type=float,
+        default=0.001,
+        help="backlash joint armature, kept small but non-zero for solver conditioning (default: 0.001)",
+    )
+    parser.add_argument(
+        "--frictionloss",
+        type=float,
+        default=0.0,
+        help="backlash joint frictionloss (default: 0)",
+    )
+    parser.add_argument(
+        "--joint-class",
+        default="chosen_actuator",
+        help="default class of the joints that get backlash (default: chosen_actuator)",
+    )
+    parser.add_argument(
+        "--exclude",
+        default=None,
+        help="optional regex of joint names to skip (e.g. '.*(neck|head).*')",
+    )
     args = parser.parse_args()
 
     half_range = math.radians(args.backlash_deg) / 2.0
     exclude = re.compile(args.exclude) if args.exclude else None
 
-    with open(args.xml) as f:
+    with Path(args.xml).open() as f:
         lines = f.readlines()
 
     if any('class="backlash"' in line for line in lines):
@@ -94,9 +119,15 @@ def main() -> int:
     for line in lines:
         # Insert the defaults block right before <worldbody>.
         if not default_inserted and "<worldbody>" in line:
-            out.append(build_backlash_default(
-                half_range, args.damping, args.armature, args.frictionloss,
-                args.backlash_deg))
+            out.append(
+                build_backlash_default(
+                    half_range,
+                    args.damping,
+                    args.armature,
+                    args.frictionloss,
+                    args.backlash_deg,
+                )
+            )
             default_inserted = True
 
         out.append(line)
@@ -114,8 +145,7 @@ def main() -> int:
         axis = attrs.get("axis", "0 0 1")
         pos = f' pos="{attrs["pos"]}"' if "pos" in attrs else ""
         out.append(
-            f'{indent}<joint axis="{axis}"{pos} '
-            f'name="passive_{name}_backlash" type="hinge" class="backlash"/>\n'
+            f'{indent}<joint axis="{axis}"{pos} name="passive_{name}_backlash" type="hinge" class="backlash"/>\n'
         )
         added.append(name)
 
@@ -123,15 +153,17 @@ def main() -> int:
         print("[add_backlash] ERROR: no <worldbody> found — is this an MJCF file?")
         return 1
     if not added:
-        print(f"[add_backlash] ERROR: no joints with class=\"{args.joint_class}\" found.")
+        print(f'[add_backlash] ERROR: no joints with class="{args.joint_class}" found.')
         return 1
 
-    with open(args.xml, "w") as f:
+    with Path(args.xml).open("w") as f:
         f.writelines(out)
 
-    print(f"[add_backlash] added {len(added)} backlash joints "
-          f"(+/-{args.backlash_deg / 2:g} deg = +/-{half_range:.5f} rad) to {args.xml}: "
-          f"{', '.join(added)}")
+    print(
+        f"[add_backlash] added {len(added)} backlash joints "
+        f"(+/-{args.backlash_deg / 2:g} deg = +/-{half_range:.5f} rad) to {args.xml}: "
+        f"{', '.join(added)}"
+    )
     return 0
 
 

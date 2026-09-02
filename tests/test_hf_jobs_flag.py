@@ -95,9 +95,7 @@ def test_we_register_the_task_plugin_entry_point():
 @pytest.fixture
 def fake_submit(monkeypatch):
     calls = []
-    monkeypatch.setattr(
-        "mjlab_microduck.hf_jobs.submit", lambda argv: calls.append(argv) or 0
-    )
+    monkeypatch.setattr("mjlab_microduck.hf_jobs.submit", lambda argv: calls.append(argv) or 0)
     return calls
 
 
@@ -146,9 +144,7 @@ def test_interception_is_disarmed_inside_the_job(monkeypatch, fake_submit):
 def test_submitted_job_env_disarms_the_interception():
     """The env var above is only useful if submit() actually sets it."""
     src = (_ROOT / "src/mjlab_microduck/hf_jobs.py").read_text()
-    assert f'"{train_hook._IN_JOB_ENV}": "1"' in src, (
-        f"submit() must put {train_hook._IN_JOB_ENV} on the job's env"
-    )
+    assert f'"{train_hook._IN_JOB_ENV}": "1"' in src, f"submit() must put {train_hook._IN_JOB_ENV} on the job's env"
 
 
 # The load-bearing assumption, exercised through the real import paths: both

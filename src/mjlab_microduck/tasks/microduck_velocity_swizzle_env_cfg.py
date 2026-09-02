@@ -28,12 +28,20 @@ from mjlab_microduck.tasks.microduck_velocity_rollers_env_cfg import (
 )
 
 # Stride / anti-swizzle rewards to drop for the swizzle task.
-_ANTI_SWIZZLE = ("single_support", "glide", "skating_air_time", "gait_symmetry", "hip_roll_neutral")
+_ANTI_SWIZZLE = (
+    "single_support",
+    "glide",
+    "skating_air_time",
+    "gait_symmetry",
+    "hip_roll_neutral",
+)
 
 
 def make_microduck_velocity_swizzle_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    """Roller swizzle env: the stride env minus its anti-swizzle terms, plus symmetry
-    and grounded rewards. Everything else (robot, obs, command, DR) is identical."""
+    """Roller swizzle env: the stride env minus its anti-swizzle terms, plus symmetry and grounded rewards.
+
+    Everything else (robot, obs, command, DR) is identical.
+    """
     cfg = make_microduck_velocity_rollers_env_cfg(play=play)
 
     for name in _ANTI_SWIZZLE:
@@ -87,10 +95,13 @@ def make_microduck_velocity_swizzle_env_cfg(play: bool = False) -> ManagerBasedR
         params={
             "reward_name": "heading_hold",
             "weight_stages": [
-                {"step": 0,          "weight": 1.0},   # must match heading_hold's initial weight
-                {"step": 1000 * 24,  "weight": 1.0},   # hold straight while the swizzle solidifies
-                {"step": 1750 * 24,  "weight": 0.5},
-                {"step": 2500 * 24,  "weight": 0.0},
+                {"step": 0, "weight": 1.0},  # must match heading_hold's initial weight
+                {
+                    "step": 1000 * 24,
+                    "weight": 1.0,
+                },  # hold straight while the swizzle solidifies
+                {"step": 1750 * 24, "weight": 0.5},
+                {"step": 2500 * 24, "weight": 0.0},
             ],
         },
     )
@@ -99,10 +110,10 @@ def make_microduck_velocity_swizzle_env_cfg(play: bool = False) -> ManagerBasedR
         params={
             "reward_name": "heading_tracking",
             "weight_stages": [
-                {"step": 0,          "weight": 0.0},
-                {"step": 1000 * 24,  "weight": 0.0},   # straight-only until here
-                {"step": 1750 * 24,  "weight": 1.5},
-                {"step": 2500 * 24,  "weight": 3.0},
+                {"step": 0, "weight": 0.0},
+                {"step": 1000 * 24, "weight": 0.0},  # straight-only until here
+                {"step": 1750 * 24, "weight": 1.5},
+                {"step": 2500 * 24, "weight": 3.0},
             ],
         },
     )
@@ -114,9 +125,9 @@ def make_microduck_velocity_swizzle_env_cfg(play: bool = False) -> ManagerBasedR
     cfg.commands["head_pose"] = microduck_mdp.UniformPoseCommandCfg(
         resampling_time_range=(2.0, 5.0),
         ranges=(
-            (-0.05, 0.05),    # neck_pitch
-            (-0.05, 0.05),    # head_pitch
-            (-0.07, 0.07),    # head_yaw
+            (-0.05, 0.05),  # neck_pitch
+            (-0.05, 0.05),  # head_pitch
+            (-0.07, 0.07),  # head_yaw
             (-0.015, 0.015),  # head_roll (tighter — small mechanical range)
         ),
     )
@@ -148,8 +159,7 @@ def make_microduck_velocity_swizzle_env_cfg(play: bool = False) -> ManagerBasedR
             std_dict = cfg.rewards["pose"].params[std_key]
             # Keep only leg joint patterns (filter out neck, head, passive)
             cfg.rewards["pose"].params[std_key] = {
-                k: v for k, v in std_dict.items()
-                if "neck" not in k and "head" not in k and "passive" not in k
+                k: v for k, v in std_dict.items() if "neck" not in k and "head" not in k and "passive" not in k
             }
     # Scope asset_cfg to LEG joints only (excludes neck, head, passive wheels)
     cfg.rewards["pose"].params["asset_cfg"] = SceneEntityCfg(
@@ -163,10 +173,10 @@ def make_microduck_velocity_swizzle_env_cfg(play: bool = False) -> ManagerBasedR
         params={
             "reward_name": "head_pose_tracking",
             "weight_stages": [
-                {"step": 0,          "weight": 0.0},   # must match initial weight
-                {"step": 1500 * 24,  "weight": 0.0},   # head off while swizzle solidifies
-                {"step": 2250 * 24,  "weight": 2.0},
-                {"step": 3000 * 24,  "weight": 4.0},
+                {"step": 0, "weight": 0.0},  # must match initial weight
+                {"step": 1500 * 24, "weight": 0.0},  # head off while swizzle solidifies
+                {"step": 2250 * 24, "weight": 2.0},
+                {"step": 3000 * 24, "weight": 4.0},
             ],
         },
     )
@@ -179,10 +189,42 @@ def make_microduck_velocity_swizzle_env_cfg(play: bool = False) -> ManagerBasedR
             "command_name": "head_pose",
             "range_stages": [
                 # step,               ((neck_pitch), (head_pitch), (head_yaw),  (head_roll))
-                {"step": 0,          "ranges": ((-0.05, 0.05), (-0.05, 0.05), (-0.07, 0.07), (-0.015, 0.015))},
-                {"step": 1500 * 24,  "ranges": ((-0.05, 0.05), (-0.05, 0.05), (-0.07, 0.07), (-0.015, 0.015))},
-                {"step": 2250 * 24,  "ranges": ((-0.55, 0.55), (-0.55, 0.55), (-0.70, 0.70), (-0.15, 0.15))},
-                {"step": 3000 * 24,  "ranges": ((-1.10, 1.10), (-1.10, 1.10), (-1.40, 1.40), (-0.31, 0.31))},
+                {
+                    "step": 0,
+                    "ranges": (
+                        (-0.05, 0.05),
+                        (-0.05, 0.05),
+                        (-0.07, 0.07),
+                        (-0.015, 0.015),
+                    ),
+                },
+                {
+                    "step": 1500 * 24,
+                    "ranges": (
+                        (-0.05, 0.05),
+                        (-0.05, 0.05),
+                        (-0.07, 0.07),
+                        (-0.015, 0.015),
+                    ),
+                },
+                {
+                    "step": 2250 * 24,
+                    "ranges": (
+                        (-0.55, 0.55),
+                        (-0.55, 0.55),
+                        (-0.70, 0.70),
+                        (-0.15, 0.15),
+                    ),
+                },
+                {
+                    "step": 3000 * 24,
+                    "ranges": (
+                        (-1.10, 1.10),
+                        (-1.10, 1.10),
+                        (-1.40, 1.40),
+                        (-0.31, 0.31),
+                    ),
+                },
             ],
         },
     )

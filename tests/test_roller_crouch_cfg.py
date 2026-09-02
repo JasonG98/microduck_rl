@@ -1,7 +1,5 @@
-from mjlab_microduck.tasks.microduck_roller_crouch_env_cfg import (
-    make_microduck_roller_crouch_env_cfg,
-)
 from mjlab_microduck.tasks import mdp as microduck_mdp
+from mjlab_microduck.tasks.microduck_roller_crouch_env_cfg import make_microduck_roller_crouch_env_cfg
 
 
 def test_cfg_uses_phase_command():
@@ -28,7 +26,13 @@ def test_cfg_has_crouch_and_forward_rewards():
     cp = cfg.rewards["crouch_glide_pose"].params["crouch_pose"]
     assert "left_knee" in cp and "right_knee" in cp
     # rewards de patinage actif retirées (pas de stride pendant le trick)
-    for gone in ("braking", "skating_air_time", "single_support", "glide", "wheel_speed"):
+    for gone in (
+        "braking",
+        "skating_air_time",
+        "single_support",
+        "glide",
+        "wheel_speed",
+    ):
         assert gone not in cfg.rewards
 
 

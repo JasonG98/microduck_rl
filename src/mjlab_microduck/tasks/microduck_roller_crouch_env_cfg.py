@@ -19,27 +19,27 @@ from copy import deepcopy
 ENABLE_SYMMETRY = False
 
 # DR — repris du roller env
-ENABLE_COM_RANDOMIZATION             = True
-ENABLE_HEAD_COM_RANDOMIZATION        = True
-ENABLE_MASS_INERTIA_RANDOMIZATION    = True
-ENABLE_JOINT_FRICTION_RANDOMIZATION  = True
-ENABLE_ARMATURE_RANDOMIZATION        = True
-ENABLE_WHEEL_FRICTION_RANDOMIZATION  = True
-ENABLE_VELOCITY_PUSHES               = True
+ENABLE_COM_RANDOMIZATION = True
+ENABLE_HEAD_COM_RANDOMIZATION = True
+ENABLE_MASS_INERTIA_RANDOMIZATION = True
+ENABLE_JOINT_FRICTION_RANDOMIZATION = True
+ENABLE_ARMATURE_RANDOMIZATION = True
+ENABLE_WHEEL_FRICTION_RANDOMIZATION = True
+ENABLE_VELOCITY_PUSHES = True
 ENABLE_IMU_ORIENTATION_RANDOMIZATION = True
-ENABLE_ENCODER_BIAS                  = True
+ENABLE_ENCODER_BIAS = True
 
-COM_RANDOMIZATION_RANGE          = 0.003
-HEAD_COM_RANDOMIZATION_RANGE     = 0.003
+COM_RANDOMIZATION_RANGE = 0.003
+HEAD_COM_RANDOMIZATION_RANGE = 0.003
 MASS_INERTIA_RANDOMIZATION_RANGE = (0.95, 1.05)
 JOINT_FRICTION_RANDOMIZATION_RANGE = (0.9, 1.1)
-ARMATURE_RANDOMIZATION_RANGE     = (0.9, 1.1)
-VELOCITY_PUSH_INTERVAL_S         = (3.0, 6.0)
-VELOCITY_PUSH_RANGE              = (-0.2, 0.2)
+ARMATURE_RANDOMIZATION_RANGE = (0.9, 1.1)
+VELOCITY_PUSH_INTERVAL_S = (3.0, 6.0)
+VELOCITY_PUSH_RANGE = (-0.2, 0.2)
 IMU_ORIENTATION_RANDOMIZATION_ANGLE = 6.0
-ENCODER_BIAS_RANGE               = (-0.015, 0.015)
+ENCODER_BIAS_RANGE = (-0.015, 0.015)
 
-ENTRY_VELOCITY_X   = (0.2, 0.5)  # m/s : le robot arrive en roulant
+ENTRY_VELOCITY_X = (0.2, 0.5)  # m/s : le robot arrive en roulant
 
 # Timing du cycle (phase), 4 segments sur une période de 5 s :
 #   descente     [0, DESCENT_END]        = 0.10*5 = 0.5 s  (se baisser)
@@ -48,9 +48,9 @@ ENTRY_VELOCITY_X   = (0.2, 0.5)  # m/s : le robot arrive en roulant
 #   haut/debout  [RISE_END, 1.0]         = 0.40*5 = 2.0 s  (repos debout)
 # NB: la période DOIT matcher --ground-pick-period au déploiement (5.0).
 CROUCH_PERIOD = 5.0
-DESCENT_END   = 0.10
-HOLD_END      = 0.50
-RISE_END      = 0.60
+DESCENT_END = 0.10
+HOLD_END = 0.50
+RISE_END = 0.60
 
 # Pose ACCROUPI cible (rad, par NOM d'articulation) — composée dans
 # scripts/crouch_pose_editor.py. La reward interpole DEBOUT(HOME) <-> cette pose
@@ -62,11 +62,20 @@ RISE_END      = 0.60
 # qui repart de HOME — garde STAND_POSE proche de HOME pour un retour propre.
 STAND_POSE = {
     # Lue sur le VRAI robot (read_pose.py) — station debout voulue pour le trick.
-    "left_hip_yaw": -0.0476, "left_hip_roll": -0.0629, "left_hip_pitch": -0.2869,
-    "left_knee": 0.9618, "left_ankle": 1.1674,
-    "neck_pitch": 0.6029, "head_pitch": 0.543, "head_yaw": -0.069, "head_roll": -0.0414,
-    "right_hip_yaw": -0.0337, "right_hip_roll": -0.0061, "right_hip_pitch": 0.1534,
-    "right_knee": -0.9725, "right_ankle": -1.0646,
+    "left_hip_yaw": -0.0476,
+    "left_hip_roll": -0.0629,
+    "left_hip_pitch": -0.2869,
+    "left_knee": 0.9618,
+    "left_ankle": 1.1674,
+    "neck_pitch": 0.6029,
+    "head_pitch": 0.543,
+    "head_yaw": -0.069,
+    "head_roll": -0.0414,
+    "right_hip_yaw": -0.0337,
+    "right_hip_roll": -0.0061,
+    "right_hip_pitch": 0.1534,
+    "right_knee": -0.9725,
+    "right_ankle": -1.0646,
 }
 
 CROUCH_POSE = {
@@ -100,7 +109,7 @@ from mjlab.managers import (
     TerminationTermCfg,
 )
 from mjlab.managers.scene_entity_config import SceneEntityCfg
-from mjlab.rl import RslRlOnPolicyRunnerCfg, RslRlModelCfg
+from mjlab.rl import RslRlModelCfg, RslRlOnPolicyRunnerCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.tasks.velocity import mdp
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
@@ -110,12 +119,11 @@ from mjlab.utils.noise import UniformNoiseCfg as Unoise
 from mjlab_microduck.robot.microduck_constants import MICRODUCK_WALK_ROLLERS_ROBOT_CFG
 from mjlab_microduck.tasks import mdp as microduck_mdp
 from mjlab_microduck.tasks.microduck_velocity_env_cfg import HEAD_BODY_NAMES
-from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg, SYMMETRY_CFG
+from mjlab_microduck.tasks.symmetry import SYMMETRY_CFG, PpoWithSymmetryCfg
 
 
 def make_microduck_roller_crouch_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     """Env crouch-glide sur rollers, piloté par la phase du slot ground-pick."""
-
     feet_ground_cfg = ContactSensorCfg(
         name="feet_ground_contact",
         primary=ContactMatch(
@@ -218,21 +226,19 @@ def make_microduck_roller_crouch_env_cfg(play: bool = False) -> ManagerBasedRlEn
         weight=-1.0,
         params={"sensor_name": "self_collision"},
     )
-    cfg.rewards["neck_action_rate_l2"] = RewardTermCfg(
-        func=microduck_mdp.neck_action_rate_l2, weight=-0.5
-    )
-    cfg.rewards["joint_torques_l2"] = RewardTermCfg(
-        func=microduck_mdp.joint_torques_l2, weight=-1e-3
-    )
+    cfg.rewards["neck_action_rate_l2"] = RewardTermCfg(func=microduck_mdp.neck_action_rate_l2, weight=-0.5)
+    cfg.rewards["joint_torques_l2"] = RewardTermCfg(func=microduck_mdp.joint_torques_l2, weight=-1e-3)
 
     # === TERMINATIONS ===
     cfg.terminations["nan_state"] = TerminationTermCfg(
-        func=microduck_mdp.robot_state_is_nan, time_out=False,
+        func=microduck_mdp.robot_state_is_nan,
+        time_out=False,
     )
 
     # === EVENTS ===
     cfg.events["reset_action_history"] = EventTermCfg(
-        func=microduck_mdp.reset_action_history, mode="reset",
+        func=microduck_mdp.reset_action_history,
+        mode="reset",
     )
     del cfg.events["foot_friction"]
 
@@ -267,7 +273,8 @@ def make_microduck_roller_crouch_env_cfg(play: bool = False) -> ManagerBasedRlEn
         )
     if ENABLE_COM_RANDOMIZATION:
         cfg.events["randomize_com"] = EventTermCfg(
-            func=dr.body_ipos, mode="reset",
+            func=dr.body_ipos,
+            mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("robot", body_names=("trunk_base",)),
                 "operation": "add",
@@ -276,7 +283,8 @@ def make_microduck_roller_crouch_env_cfg(play: bool = False) -> ManagerBasedRlEn
         )
     if ENABLE_HEAD_COM_RANDOMIZATION:
         cfg.events["randomize_head_com"] = EventTermCfg(
-            func=dr.body_ipos, mode="reset",
+            func=dr.body_ipos,
+            mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("robot", body_names=HEAD_BODY_NAMES),
                 "operation": "add",
@@ -286,7 +294,8 @@ def make_microduck_roller_crouch_env_cfg(play: bool = False) -> ManagerBasedRlEn
     if ENABLE_MASS_INERTIA_RANDOMIZATION:
         _mi_lo, _mi_hi = MASS_INERTIA_RANDOMIZATION_RANGE
         cfg.events["randomize_mass_inertia"] = EventTermCfg(
-            func=dr.pseudo_inertia, mode="startup",
+            func=dr.pseudo_inertia,
+            mode="startup",
             params={
                 "asset_cfg": SceneEntityCfg("robot", body_names=("trunk_base",)),
                 "alpha_range": (math.log(_mi_lo) / 2.0, math.log(_mi_hi) / 2.0),
@@ -294,7 +303,8 @@ def make_microduck_roller_crouch_env_cfg(play: bool = False) -> ManagerBasedRlEn
         )
     if ENABLE_JOINT_FRICTION_RANDOMIZATION:
         cfg.events["randomize_joint_friction"] = EventTermCfg(
-            func=microduck_mdp.randomize_bam_friction, mode="reset",
+            func=microduck_mdp.randomize_bam_friction,
+            mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("robot"),
                 "scale_range": JOINT_FRICTION_RANDOMIZATION_RANGE,
@@ -302,7 +312,8 @@ def make_microduck_roller_crouch_env_cfg(play: bool = False) -> ManagerBasedRlEn
         )
     if ENABLE_ARMATURE_RANDOMIZATION:
         cfg.events["randomize_armature"] = EventTermCfg(
-            func=dr.joint_armature, mode="reset",
+            func=dr.joint_armature,
+            mode="reset",
             params={
                 "asset_cfg": SceneEntityCfg("robot", joint_names=(r"^(?!passive_).*",)),
                 "operation": "scale",
@@ -316,16 +327,13 @@ def make_microduck_roller_crouch_env_cfg(play: bool = False) -> ManagerBasedRlEn
     del cfg.observations["actor"].terms["height_scan"]
     del cfg.observations["critic"].terms["height_scan"]
     cfg.observations["critic"].terms["base_lin_vel"] = ObservationTermCfg(
-        func=mdp.base_lin_vel, scale=1.0,
+        func=mdp.base_lin_vel,
+        scale=1.0,
     )
 
     gravity_term_name = "projected_gravity"
-    cfg.observations["actor"].terms[gravity_term_name] = deepcopy(
-        cfg.observations["actor"].terms[gravity_term_name]
-    )
-    cfg.observations["actor"].terms["base_ang_vel"] = deepcopy(
-        cfg.observations["actor"].terms["base_ang_vel"]
-    )
+    cfg.observations["actor"].terms[gravity_term_name] = deepcopy(cfg.observations["actor"].terms[gravity_term_name])
+    cfg.observations["actor"].terms["base_ang_vel"] = deepcopy(cfg.observations["actor"].terms["base_ang_vel"])
     cfg.observations["actor"].terms["base_ang_vel"].delay_min_lag = 0
     cfg.observations["actor"].terms["base_ang_vel"].delay_max_lag = 1
     cfg.observations["actor"].terms["base_ang_vel"].delay_update_period = 64
@@ -345,9 +353,7 @@ def make_microduck_roller_crouch_env_cfg(play: bool = False) -> ManagerBasedRlEn
         g.func = microduck_mdp.projected_gravity_imu_misaligned
         g.params = {"max_angle_deg": IMU_ORIENTATION_RANDOMIZATION_ANGLE}
 
-    cfg.observations["actor"].terms["joint_vel"] = deepcopy(
-        cfg.observations["actor"].terms["joint_vel"]
-    )
+    cfg.observations["actor"].terms["joint_vel"] = deepcopy(cfg.observations["actor"].terms["joint_vel"])
     cfg.observations["actor"].terms["joint_vel"].delay_min_lag = 1
     cfg.observations["actor"].terms["joint_vel"].delay_max_lag = 1
     cfg.observations["actor"].terms["joint_vel"].delay_update_period = 0
@@ -367,15 +373,19 @@ def make_microduck_roller_crouch_env_cfg(play: bool = False) -> ManagerBasedRlEn
 
     wheel_cfg = SceneEntityCfg("robot", joint_names=(r"^passive_.*wheel",))
     cfg.observations["critic"].terms["wheel_vel"] = ObservationTermCfg(
-        func=mdp.joint_vel_rel, scale=1.0, params={"asset_cfg": wheel_cfg},
+        func=mdp.joint_vel_rel,
+        scale=1.0,
+        params={"asset_cfg": wheel_cfg},
     )
 
     for group in ("actor", "critic"):
         cfg.observations[group].terms["head_command"] = ObservationTermCfg(
-            func=microduck_mdp.zero_command_padding, params={"dim": 4},
+            func=microduck_mdp.zero_command_padding,
+            params={"dim": 4},
         )
         cfg.observations[group].terms["body_command"] = ObservationTermCfg(
-            func=microduck_mdp.zero_command_padding, params={"dim": 6},
+            func=microduck_mdp.zero_command_padding,
+            params={"dim": 6},
         )
 
     # === COMMAND: phase (comme ground_pick) ===

@@ -141,24 +141,25 @@ def _wandb_api_key() -> str | None:
 def _repo_root() -> Path:
     """Repo root of the CURRENT directory — worktree-aware.
 
-    (The old scripts/hf/train_hf.py used the script file's location; resolving
-    from cwd instead means running from a worktree snapshots that worktree.)
+    (The old scripts/hf/train_hf.py used the script file's location; resolving from cwd instead means running from a
+    worktree snapshots that worktree.)
     """
     out = subprocess.check_output(["git", "rev-parse", "--show-toplevel"])
     return Path(out.decode().strip())
 
 
 def _build_tarball(repo_root: Path, out_path: Path) -> str:
-    """Create a tarball of HEAD + uncommitted tracked changes. Returns short SHA."""
-    sha = subprocess.check_output(
-        ["git", "rev-parse", "--short", "HEAD"], cwd=repo_root
-    ).decode().strip()
+    """Create a tarball of HEAD + uncommitted tracked changes.
+
+    Returns short SHA.
+    """
+    sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=repo_root).decode().strip()
 
     # Use `git ls-files` so we include tracked-but-modified files (working tree
     # state) but skip ignored junk (.venv, logs, *.onnx, wandb/, etc.).
-    files = subprocess.check_output(
-        ["git", "ls-files", "-co", "--exclude-standard"], cwd=repo_root
-    ).decode().splitlines()
+    files = (
+        subprocess.check_output(["git", "ls-files", "-co", "--exclude-standard"], cwd=repo_root).decode().splitlines()
+    )
 
     with tarfile.open(out_path, "w:gz") as tar:
         for rel in files:
@@ -171,8 +172,8 @@ def _build_tarball(repo_root: Path, out_path: Path) -> str:
 def _pick_namespace(api: HfApi, preset: str | None) -> str:
     """Choose the namespace (personal account or org) the job runs under.
 
-    Interactive prompt unless --namespace was given or there is nothing to
-    choose. Non-tty (scripts, CI) falls back to the personal account.
+    Interactive prompt unless --namespace was given or there is nothing to choose. Non-tty (scripts, CI) falls back to
+    the personal account.
     """
     info = api.whoami()
     user = info.get("name") or info.get("email")
@@ -211,16 +212,12 @@ def _pick_namespace(api: HfApi, preset: str | None) -> str:
         print(f"  invalid choice: {raw!r}")
 
 
-def _await_scheduling(
-    api: HfApi, job_id: str, namespace: str, budget_s: float = 1200.0
-) -> tuple[str, str | None]:
+def _await_scheduling(api: HfApi, job_id: str, namespace: str, budget_s: float = 1200.0) -> tuple[str, str | None]:
     """Poll until the job leaves SCHEDULING (image pull / queue / mounts).
 
-    This phase legitimately takes minutes (the pytorch image pull alone is
-    ~5 min on a cold GPU node) and is also where volume-mount failures
-    surface, ~7 min in ("init container exhausted retries"). Returns
-    (stage, message) at the first non-SCHEDULING stage, or the last observed
-    one when the budget runs out (a long queue is not an error — the caller's
+    This phase legitimately takes minutes (the pytorch image pull alone is ~5 min on a cold GPU node) and is also where
+    volume-mount failures surface, ~7 min in ("init container exhausted retries"). Returns (stage, message) at the first
+    non-SCHEDULING stage, or the last observed one when the budget runs out (a long queue is not an error — the caller's
     streaming loop keeps supervising).
     """
     deadline = time.monotonic() + budget_s
@@ -260,11 +257,13 @@ def submit(argv: list[str]) -> int:
         help="Short tag for this run; defaults to task+timestamp",
     )
     ap.add_argument(
-        "--detach", action="store_true",
+        "--detach",
+        action="store_true",
         help="Submit and return immediately (do not stream logs).",
     )
     ap.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Build tarball and print the job spec without submitting.",
     )
     ap.add_argument(
@@ -281,20 +280,22 @@ def submit(argv: list[str]) -> int:
         "--uv-cache-bucket",
         default=None,
         help="HF bucket used as UV_CACHE_DIR to persist wheels across runs. "
-             "Defaults to <namespace>/mjlab-uv-cache. Requires --uv-cache.",
+        "Defaults to <namespace>/mjlab-uv-cache. Requires --uv-cache.",
     )
     ap.add_argument(
-        "--uv-cache", action="store_true",
+        "--uv-cache",
+        action="store_true",
         help="Mount a persistent uv cache bucket (OFF by default: the FUSE "
-             "bucket mount does not support hardlinks, so `uv sync` falls back "
-             "to full-copying ~6 GB of unpacked packages through the network "
-             "mount — far slower than just re-downloading wheels from PyPI, "
-             "which HF's datacenter bandwidth handles in ~1 min; it also "
-             "poisons across uv versions: a 0.9.x-era entry made 0.11.30 die "
-             "with 'wheel is invalid: Missing .dist-info', 2026-07-21).",
+        "bucket mount does not support hardlinks, so `uv sync` falls back "
+        "to full-copying ~6 GB of unpacked packages through the network "
+        "mount — far slower than just re-downloading wheels from PyPI, "
+        "which HF's datacenter bandwidth handles in ~1 min; it also "
+        "poisons across uv versions: a 0.9.x-era entry made 0.11.30 die "
+        "with 'wheel is invalid: Missing .dist-info', 2026-07-21).",
     )
     ap.add_argument(
-        "--no-wandb", action="store_true",
+        "--no-wandb",
+        action="store_true",
         help="Do not forward a wandb API key (training will fail if wandb is enabled).",
     )
     args, train_args = ap.parse_known_args(argv)
@@ -373,8 +374,8 @@ def submit(argv: list[str]) -> int:
             print(f"  image:     {args.image}")
             print(f"  flavor:    {args.flavor}, timeout: {args.timeout}")
             print(f"  volumes:   {[f'{v.type}:{v.source} -> {v.mount_path}' for v in volumes]}")
-            print(f"  env:       { {k: v for k, v in env.items()} }")
-            print(f"  secrets:   { {k: '***' for k in secrets} }")
+            print(f"  env:       {dict(env.items())}")
+            print(f"  secrets:   {dict.fromkeys(secrets, '***')}")
             print(f"  ckpt repo: https://huggingface.co/{ckpt_repo}")
             return 0
 
@@ -434,7 +435,7 @@ def submit(argv: list[str]) -> int:
                         "        https://huggingface.co/settings/tokens\n"
                         "      (fine-grained → under your user AND/OR the org, tick the 'Jobs' permissions),\n"
                         "      then re-login locally:  hf auth login\n"
-                        "    → Verify:  python -c \"from huggingface_hub import HfApi; \"\n"
+                        '    → Verify:  python -c "from huggingface_hub import HfApi; "\n'
                         "               \"print(list(HfApi().list_jobs(namespace='<ns>')))\"  (must not 403)\n"
                         "    (If Jobs are enabled but still blocked, the namespace may also need an HF\n"
                         "     plan/credits that include Jobs — see the billing link above.)",
@@ -446,8 +447,10 @@ def submit(argv: list[str]) -> int:
             if getattr(job, "url", None):
                 print(f"[job] url: {job.url}")
             if args.detach:
-                print("[job] --detach: not supervising startup — check the URL above; "
-                      "transient 'Volume mount failed' errors need a manual resubmit.")
+                print(
+                    "[job] --detach: not supervising startup — check the URL above; "
+                    "transient 'Volume mount failed' errors need a manual resubmit."
+                )
                 return 0
             stage, message = _await_scheduling(api, job.id, namespace)
             if stage == "ERROR" and "mount" in (message or "").lower():

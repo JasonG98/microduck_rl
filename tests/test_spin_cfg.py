@@ -1,8 +1,5 @@
 from mjlab_microduck.tasks import mdp as microduck_mdp
-from mjlab_microduck.tasks.microduck_spin_env_cfg import (
-    make_microduck_spin_env_cfg,
-    MicroduckSpinRlCfg,
-)
+from mjlab_microduck.tasks.microduck_spin_env_cfg import MicroduckSpinRlCfg, make_microduck_spin_env_cfg
 
 
 def test_cfg_uses_phase_command_with_runtime_default_period():
@@ -105,6 +102,6 @@ def test_obs_parity_with_roller_crouch():
     spin = make_microduck_spin_env_cfg()
     crouch = make_microduck_roller_crouch_env_cfg()
     for grp in ("actor", "critic"):
-        assert list(spin.observations[grp].terms.keys()) == list(
-            crouch.observations[grp].terms.keys()
-        ), f"layout d'observation divergent sur le groupe {grp}"
+        assert list(spin.observations[grp].terms.keys()) == list(crouch.observations[grp].terms.keys()), (
+            f"layout d'observation divergent sur le groupe {grp}"
+        )

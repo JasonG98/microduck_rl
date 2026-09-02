@@ -5,7 +5,7 @@ import torch
 from mjlab_microduck.tasks import mdp
 
 # Enveloppe du spec : accel 0.5s / régime 1.6s / freinage 0.5s / repos 1.4s sur 4s.
-_ENV = dict(rate_max=6.0, accel_end=0.125, hold_end=0.525, brake_end=0.650)
+_ENV = {"rate_max": 6.0, "accel_end": 0.125, "hold_end": 0.525, "brake_end": 0.650}
 
 
 def test_spin_rate_segment_boundaries():
@@ -169,9 +169,7 @@ def test_spin_rate_track_uses_yaw_and_phase():
     # robot immobile doit être largement en dessous (exp(-(3/1.5)^2) = 0.018 au
     # réglage courant : std=1.5 reste bien calibré à cette cible, cf. mdp.py).
     ang = torch.tensor([[0.0, 0.0, mdp.SPIN_RATE_MAX], [0.0, 0.0, 0.0]])
-    env = _FakeEnv(
-        _FakeEntity(_FakeData(ang_vel_b=ang)), cmd=_phase_cmd([0.30, 0.30])
-    )
+    env = _FakeEnv(_FakeEntity(_FakeData(ang_vel_b=ang)), cmd=_phase_cmd([0.30, 0.30]))
     r = mdp.spin_rate_track(env, std=1.5)
     assert r[0] > 0.99
     assert r[1] < 0.05
@@ -180,9 +178,7 @@ def test_spin_rate_track_uses_yaw_and_phase():
 def test_spin_rate_track_wants_stillness_during_rest():
     # phase 0.80 = repos -> cible 0 : tourner encore est puni, être immobile payé.
     ang = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 6.0]])
-    env = _FakeEnv(
-        _FakeEntity(_FakeData(ang_vel_b=ang)), cmd=_phase_cmd([0.80, 0.80])
-    )
+    env = _FakeEnv(_FakeEntity(_FakeData(ang_vel_b=ang)), cmd=_phase_cmd([0.80, 0.80]))
     r = mdp.spin_rate_track(env, std=1.5)
     assert r[0] > 0.99
     assert r[1] < 0.01
@@ -192,9 +188,7 @@ def test_spin_rate_track_penalizes_wrong_direction():
     # tourner à -SPIN_RATE_MAX (horaire) quand on demande +SPIN_RATE_MAX doit
     # être pire qu'immobile.
     ang = torch.tensor([[0.0, 0.0, -mdp.SPIN_RATE_MAX], [0.0, 0.0, 0.0]])
-    env = _FakeEnv(
-        _FakeEntity(_FakeData(ang_vel_b=ang)), cmd=_phase_cmd([0.30, 0.30])
-    )
+    env = _FakeEnv(_FakeEntity(_FakeData(ang_vel_b=ang)), cmd=_phase_cmd([0.30, 0.30]))
     r = mdp.spin_rate_track(env, std=1.5)
     assert r[0] < r[1]
 
@@ -203,9 +197,7 @@ def test_spin_rate_track_penalizes_wrong_direction():
 def test_spin_rate_l1_is_negative_absolute_error():
     # phase 0.30 = plein régime -> cible SPIN_RATE_MAX (3.0 rad/s, défaut).
     ang = torch.tensor([[0.0, 0.0, mdp.SPIN_RATE_MAX], [0.0, 0.0, 1.0]])
-    env = _FakeEnv(
-        _FakeEntity(_FakeData(ang_vel_b=ang)), cmd=_phase_cmd([0.30, 0.30])
-    )
+    env = _FakeEnv(_FakeEntity(_FakeData(ang_vel_b=ang)), cmd=_phase_cmd([0.30, 0.30]))
     r = mdp.spin_rate_l1(env)
     expected = torch.tensor([0.0, -(mdp.SPIN_RATE_MAX - 1.0)])
     assert torch.allclose(r, expected, atol=1e-5)
@@ -215,9 +207,7 @@ def test_spin_rate_l1_is_negative_absolute_error():
 def test_spin_stay_in_place_is_squared_planar_speed():
     # phase 0.30 = plein régime -> coût plein tarif
     lin = torch.tensor([[0.0, 0.0, 0.0], [0.3, 0.4, 9.0]])
-    env = _FakeEnv(
-        _FakeEntity(_FakeData(lin_vel_b=lin)), cmd=_phase_cmd([0.30, 0.30])
-    )
+    env = _FakeEnv(_FakeEntity(_FakeData(lin_vel_b=lin)), cmd=_phase_cmd([0.30, 0.30]))
     c = mdp.spin_stay_in_place(env)
     # 0.3^2 + 0.4^2 = 0.25 ; la composante z est ignorée
     assert torch.allclose(c, torch.tensor([0.0, 0.25]), atol=1e-6)
@@ -228,9 +218,7 @@ def test_spin_stay_in_place_is_attenuated_during_the_launch_ramp():
     # coût est multiplié par launch_scale, en régime (0.30) il est plein tarif.
     # C'est ce qui empêche ce terme de s'opposer à l'injection de moment angulaire.
     lin = torch.tensor([[0.3, 0.4, 0.0], [0.3, 0.4, 0.0]])
-    env = _FakeEnv(
-        _FakeEntity(_FakeData(lin_vel_b=lin)), cmd=_phase_cmd([0.05, 0.30])
-    )
+    env = _FakeEnv(_FakeEntity(_FakeData(lin_vel_b=lin)), cmd=_phase_cmd([0.05, 0.30]))
     c = mdp.spin_stay_in_place(env, launch_scale=0.2, accel_end=0.125)
     # 0.25 * 0.2 = 0.05
     assert torch.allclose(c, torch.tensor([0.05, 0.25]), atol=1e-6)
@@ -267,7 +255,7 @@ def test_wheel_differential_rewards_counter_rolling_wheels():
     env = _wheel_env(
         [
             [-10.0, -10.0, 10.0, 10.0],  # bon différentiel
-            [10.0, 10.0, 10.0, 10.0],    # tout droit : différentiel nul
+            [10.0, 10.0, 10.0, 10.0],  # tout droit : différentiel nul
             [10.0, 10.0, -10.0, -10.0],  # différentiel inversé (horaire)
         ],
         [0.30, 0.30, 0.30],
@@ -287,9 +275,7 @@ def test_wheel_differential_is_gated_off_during_rest():
 
 def test_wheel_differential_saturates():
     # tanh : au-delà de omega_scale la reward sature, pas de course à la vitesse.
-    env = _wheel_env(
-        [[-10.0, -10.0, 10.0, 10.0], [-100.0, -100.0, 100.0, 100.0]], [0.30, 0.30]
-    )
+    env = _wheel_env([[-10.0, -10.0, 10.0, 10.0], [-100.0, -100.0, 100.0, 100.0]], [0.30, 0.30])
     r = mdp.spin_wheel_differential(env, omega_scale=20.0)
     assert r[1] > r[0]
     assert r[1] <= 1.0
@@ -338,7 +324,7 @@ def test_leg_antisymmetry_prefers_scissor_over_mirror():
     # q_G = q_D est le CISEAU (bon ici). Valeur = -mean|q_G - q_D|, donc <= 0.
     env = _leg_env(
         [
-            [0.4, 0.3, 0.4, 0.3],    # ciseau parfait : q_G == q_D -> 0.0
+            [0.4, 0.3, 0.4, 0.3],  # ciseau parfait : q_G == q_D -> 0.0
             [0.4, 0.3, -0.4, -0.3],  # miroir : écart 0.8 et 0.6 -> -0.7
         ],
         [0.30, 0.30],
@@ -376,9 +362,7 @@ def test_neck_joint_pos_l2_pattern_can_exclude_head_yaw():
     env = _FakeEnv(entity)
 
     # motif par défaut : head_yaw compté -> coût 1.0
-    assert torch.allclose(
-        mdp.neck_joint_pos_l2(env), torch.tensor([1.0]), atol=1e-6
-    )
+    assert torch.allclose(mdp.neck_joint_pos_l2(env), torch.tensor([1.0]), atol=1e-6)
     # motif du spin : head_yaw exclu -> coût 0.0 (tête libre en lacet)
     assert torch.allclose(
         mdp.neck_joint_pos_l2(env, pattern=r"^(neck_pitch|head_pitch|head_roll)$"),

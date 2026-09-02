@@ -25,7 +25,7 @@ Requires a CUDA GPU (training runs through MuJoCo Warp) and [uv](https://docs.as
 
 > **On ARM boxes (DGX Spark / GB10, Jetson):** `uv sync` pulls ~2 GB of CUDA
 > wheels on first run and uv's default 30 s HTTP timeout can abort mid-download.
-> Export `UV_HTTP_TIMEOUT=600` for the first sync. 
+> Export `UV_HTTP_TIMEOUT=600` for the first sync.
 
 ```bash
 git clone https://github.com/pollen-robotics/microduck_rl
