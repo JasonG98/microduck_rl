@@ -30,7 +30,7 @@ class _FakeAsset:
         self.data = _FakeData(joint_pos, default_pos)
 
     def find_joints(self, query):
-        # mjlab renvoie (ids, names) ; on ne gère que la requête [name]
+        # mjlab 返回 (ids, names); 这里只处理 [name] 查询
         (name,) = query
         return ([self._ids[name]], [name])
 
@@ -56,7 +56,7 @@ class _FakeEnv:
 
 NAMES = ["j0", "j1"]
 DOWN = {"j0": 1.0, "j1": -1.0}
-# HOME (STAND source) = 0 pour les deux joints
+# HOME (STAND 源) = 0 对两个关节
 HOME = torch.tensor([[0.0, 0.0]])
 
 
@@ -65,7 +65,7 @@ def _env(cur, phase):
 
 
 def test_phase_pose_track_perfect_at_down():
-    # phase 0.30 -> blend 1 -> cible = DOWN ; cur == DOWN -> gaussienne 1, l1 0
+    # phase 0.30 -> blend 1 -> 目标 = DOWN; cur == DOWN -> 高斯 1, l1 0
     from mjlab.managers.scene_entity_config import SceneEntityCfg
 
     cfg = SceneEntityCfg("robot")
@@ -78,7 +78,7 @@ def test_phase_pose_track_perfect_at_down():
 
 
 def test_phase_pose_track_l1_at_home_when_down_target():
-    # phase 0.30 -> cible DOWN=[1,-1] ; cur=HOME=[0,0] -> l1 = -mean(|1|,|1|) = -1
+    # phase 0.30 -> 目标 DOWN=[1,-1]; cur=HOME=[0,0] -> l1 = -mean(|1|,|1|) = -1
     from mjlab.managers.scene_entity_config import SceneEntityCfg
 
     cfg = SceneEntityCfg("robot")
@@ -88,7 +88,7 @@ def test_phase_pose_track_l1_at_home_when_down_target():
 
 
 def test_phase_pose_track_returns_to_stand():
-    # phase 0.80 -> blend 0 -> cible = HOME ; cur=HOME -> gaussienne 1
+    # phase 0.80 -> blend 0 -> 目标 = HOME; cur=HOME -> 高斯 1
     from mjlab.managers.scene_entity_config import SceneEntityCfg
 
     cfg = SceneEntityCfg("robot")
@@ -98,7 +98,7 @@ def test_phase_pose_track_returns_to_stand():
 
 
 def test_phase_pose_track_affine_interpolation_nonzero_home():
-    # HOME (source) nonzero, blend 0.5 at phase 0.075:
+    # HOME (源) 非零, blend 0.5 在 phase 0.075:
     # target = home + 0.5*(down-home) = [0.4,-0.4] + 0.5*([1,-1]-[0.4,-0.4]) = [0.7,-0.7]
     from mjlab.managers.scene_entity_config import SceneEntityCfg
 
@@ -114,9 +114,9 @@ def test_ground_pick_cmd_cfg_has_randomize_phase_default_true():
 
     from mjlab_microduck.tasks.mdp import GroundPickPhaseCommandCfg
 
-    # construit une cfg minimale en copiant une cfg velocity par défaut
-    # NOTE: adapté de `asset_name` (brief) -> `entity_name` (API locale de
-    # UniformVelocityCommandCfg, qui n'a pas de champ `asset_name`).
+    # 通过复制一个默认 velocity cfg 构建一个最小 cfg
+    # NOTE: 从 `asset_name` (brief) 改为 `entity_name` (本地
+    # UniformVelocityCommandCfg API, 它没有 `asset_name` 字段).
     base = UniformVelocityCommandCfg(
         entity_name="robot",
         resampling_time_range=(10.0, 10.0),

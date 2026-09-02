@@ -1,16 +1,16 @@
-"""BAM actuator with per-env friction-magnitude domain randomization.
+"""带逐环境摩擦力幅度域随机化的 BAM 执行器.
 
-The canonical ``bam.mjlab.BamActuator`` exposes per-env gain scaling (kp/kd) but no friction hook, and under BAM
-MuJoCo's ``dof_frictionloss`` is zeroed in ``edit_spec`` (BAM computes friction itself in ``compute()``). So the stock
-``dr.dof_frictionloss`` is a no-op here.
+标准的 ``bam.mjlab.BamActuator`` 暴露了逐环境的增益缩放 (kp/kd) 但没有摩擦力钩子,
+而在 BAM 下 MuJoCo 的 ``dof_frictionloss`` 在 ``edit_spec`` 中被置零 (BAM 在
+``compute()`` 中自行计算摩擦). 因此原生的 ``dr.dof_frictionloss`` 在此处是空操作.
 
-This thin subclass adds a per-env ``friction_scale`` that multiplies BAM's velocity-INDEPENDENT friction budget (Coulomb
-+ Stribeck + load-dependent) inside ``_compute_friction_budget`` — the term that carries the dominant sim2real friction
-uncertainty (stiction / gearbox). The viscous (velocity-proportional) term is left at nominal; scale it too by
-overriding ``compute`` if ever needed.
+这个薄子类增加了一个逐环境的 ``friction_scale``, 在 ``_compute_friction_budget``
+内部乘到 BAM 的与速度无关的摩擦预算上 (Coulomb + Stribeck + 负载相关) —
+该项承载了 sim2real 中主要的摩擦不确定性 (静摩擦 / 齿轮箱). 粘性 (与速度成正比)
+项保持标称值; 如有需要可通过覆写 ``compute`` 来一并缩放.
 
-Non-accumulating: ``friction_scale`` is reset to 1.0 then set to a fresh sample each episode by the
-``randomize_bam_friction`` event (see tasks/mdp.py).
+非累积: ``friction_scale`` 在每个 episode 由 ``randomize_bam_friction``
+事件先重置为 1.0 再设为新采样值 (见 tasks/mdp.py).
 """
 
 from __future__ import annotations
@@ -24,12 +24,12 @@ from mjlab.actuator.actuator import ActuatorCmd
 
 
 class FrictionDRBamActuator(BamActuator):
-    """BamActuator + per-env friction_scale on the BAM friction budget."""
+    """BamActuator + 对 BAM 摩擦预算逐环境的 friction_scale."""
 
     def initialize(self, mj_model, model, data, device) -> None:
-        """Allocate per-env ``friction_scale`` buffers (default 1.0)."""
+        """分配逐环境的 ``friction_scale`` 缓冲区 (默认 1.0)."""
         super().initialize(mj_model, model, data, device)
-        # kp_scale is (num_envs, 1); mirror it for a per-env friction multiplier.
+        # kp_scale 是 (num_envs, 1); 镜像它以得到逐环境的摩擦乘子.
         self.friction_scale = torch.ones_like(self.kp_scale)
         self.default_friction_scale = self.friction_scale.clone()
 
@@ -44,44 +44,44 @@ class FrictionDRBamActuator(BamActuator):
         return base if fs is None else base * fs  # (N, J) * (N, 1)
 
     def set_friction_scale(self, env_ids, friction_scale: torch.Tensor) -> None:
-        """Set the per-env friction scale for the given envs."""
+        """为给定环境设置逐环境的摩擦缩放."""
         self.friction_scale[env_ids] = friction_scale
 
     def reset_friction_scale(self, env_ids) -> None:
-        """Reset the per-env friction scale to its compile-time default."""
+        """将逐环境的摩擦缩放重置为编译时默认值."""
         self.friction_scale[env_ids] = self.default_friction_scale[env_ids]
 
 
 @dataclass(kw_only=True)
 class FrictionDRBamActuatorCfg(BamActuatorCfg):
-    """Drop-in for BamActuatorCfg that builds a friction-DR-capable actuator."""
+    """BamActuatorCfg 的直接替换, 构建一个支持摩擦域随机化的执行器."""
 
     def build(self, entity, target_ids, target_names) -> FrictionDRBamActuator:
-        """Build the friction-DR BAM actuator instance."""
+        """构建支持摩擦域随机化的 BAM 执行器实例."""
         return FrictionDRBamActuator(self, entity, target_ids, target_names)
 
 
 class BacklashEncoderBamActuator(FrictionDRBamActuator):
-    """FrictionDRBamActuator whose firmware PD reads the encoder THROUGH backlash.
+    """固件 PD 通过 backlash 读取编码器的 FrictionDRBamActuator.
 
-    Backlash models (robot_allcollisions_backlash.xml) put an unactuated ``passive_<joint>_backlash`` hinge in series
-    with each servo joint: the servo joint is the motor output, the backlash joint is the play between it and the link,
-    and the link angle is their sum.
+    Backlash 模型 (robot_allcollisions_backlash.xml) 在每个 servo 关节串联了一个
+    非驱动的 ``passive_<joint>_backlash`` 铰链: servo 关节是电机输出, backlash 关节
+    是它与连杆之间的间隙, 连杆角度为两者之和.
 
-    On the real servo the magnetic encoder sits on the OUTPUT side of that play, so the firmware position loop closes on
-    main+backlash — while the servo winds through the dead zone the measured position (and hence the PD error) doesn't
-    change. This subclass reproduces that: ``cmd.pos`` fed to BAM's voltage control law becomes qpos[main] +
-    qpos[backlash].
+    真实 servo 上磁性编码器位于该间隙的输出侧, 所以固件位置环在
+    main+backlash 上闭环 — 当 servo 穿过死区时测量位置 (因而 PD 误差)
+    不变. 本子类重现这一行为: 送入 BAM 电压控制律的 ``cmd.pos`` 变为
+    qpos[main] + qpos[backlash].
 
-    ``cmd.vel`` is left motor-side on purpose: in BAM it drives back-EMF and friction, which are rotor physics, not an
-    encoder-derived firmware signal.
+    ``cmd.vel`` 刻意留在电机侧: 在 BAM 中它驱动反电动势和摩擦,
+    属于转子物理量, 不是编码器派生的固件信号.
 
-    Degrades to a plain FrictionDRBamActuator on models without backlash joints (per-joint mask), so it is safe to use
-    on any microduck model.
+    在没有 backlash 关节的模型上退化为普通的 FrictionDRBamActuator
+    (逐关节掩码), 因此可安全用于任何 microduck 模型.
     """
 
     def initialize(self, mj_model, model, data, device) -> None:
-        """Resolve per-joint backlash hinge ids and the encoder-feedback mask."""
+        """解析逐关节的 backlash 铰链 id 和编码器反馈掩码."""
         super().initialize(mj_model, model, data, device)
         name_to_local = {n: i for i, n in enumerate(self.entity.joint_names)}
         ids, mask = [], []
@@ -92,10 +92,10 @@ class BacklashEncoderBamActuator(FrictionDRBamActuator):
         self._backlash_joint_ids = torch.tensor(ids, dtype=torch.long, device=device)
         self._backlash_mask = torch.tensor(mask, dtype=torch.float32, device=device)
         n_backlash = int(self._backlash_mask.sum().item())
-        print(f"[BacklashEncoderBamActuator] encoder-through-backlash feedback on {n_backlash}/{len(mask)} joints")
+        print(f"[BacklashEncoderBamActuator] {n_backlash}/{len(mask)} 个关节启用穿过 backlash 的编码器反馈")
 
     def get_command(self, data) -> ActuatorCmd:
-        """Return the command with position feedback shifted through the backlash hinges."""
+        """返回位置反馈经 backlash 铰链偏移后的命令."""
         cmd = super().get_command(data)
         pos = cmd.pos + data.joint_pos[:, self._backlash_joint_ids] * self._backlash_mask
         return dataclasses.replace(cmd, pos=pos)
@@ -103,8 +103,8 @@ class BacklashEncoderBamActuator(FrictionDRBamActuator):
 
 @dataclass(kw_only=True)
 class BacklashEncoderBamActuatorCfg(FrictionDRBamActuatorCfg):
-    """FrictionDRBamActuatorCfg whose PD feedback reads through backlash joints."""
+    """PD 反馈穿过 backlash 关节读取的 FrictionDRBamActuatorCfg."""
 
     def build(self, entity, target_ids, target_names) -> BacklashEncoderBamActuator:
-        """Build the encoder-through-backlash BAM actuator instance."""
+        """构建穿过 backlash 读取编码器的 BAM 执行器实例."""
         return BacklashEncoderBamActuator(self, entity, target_ids, target_names)

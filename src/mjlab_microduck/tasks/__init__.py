@@ -1,9 +1,8 @@
 from mjlab_microduck.train_hook import maybe_submit_to_hf_jobs
 
-# `train <task> ... --hf-jobs` submits to HF Jobs and exits here, before any
-# of the cfg imports below: this module is what mjlab's plugin loader pulls
-# in, and it is the only train path no install order can take from us (see
-# train_hook.py). A no-op without the flag.
+# `train <task> ... --hf-jobs` 会提交到 HF Jobs 并在此退出, 早于下方任何
+# cfg 导入: 此模块是 mjlab 插件加载器拉入的入口, 也是任何安装顺序都无法
+# 剥夺的唯一训练路径 (见 train_hook.py).未带该 flag 时为空操作.
 maybe_submit_to_hf_jobs()
 
 from mjlab.tasks.registry import register_mjlab_task
@@ -11,15 +10,15 @@ from mjlab.tasks.velocity.rl import VelocityOnPolicyRunner
 
 
 class MicroduckOnPolicyRunner(VelocityOnPolicyRunner):
-    """On-policy runner that strips the non-serializable ``_env`` from symmetry_cfg for yaml dumping."""
+    """On-policy runner, 用于从 symmetry_cfg 中剥离不可序列化的 ``_env`` 以便 yaml 转储."""
 
     def __init__(self, env, train_cfg: dict, log_dir=None, device="cpu", **kwargs):
-        """Initialize the runner and decouple ``symmetry_cfg`` from the live ``_env`` reference."""
+        """初始化 runner, 并将 ``symmetry_cfg`` 与活跃的 ``_env`` 引用解耦."""
         super().__init__(env, train_cfg, log_dir, device, **kwargs)
-        # resolve_symmetry_config injects _env into train_cfg["algorithm"]["symmetry_cfg"]
-        # in-place, sharing the same dict object with self.alg.symmetry.  Replace the
-        # train_cfg reference with a copy that omits _env so dump_yaml can serialize the
-        # config (MjSpec is not picklable), without touching the PPO's internal reference.
+        # resolve_symmetry_config 会就地注入 _env 到 train_cfg["algorithm"]["symmetry_cfg"],
+        # 与 self.alg.symmetry 共享同一个 dict 对象.用一个去掉 _env 的副本替换
+        # train_cfg 引用, 这样 dump_yaml 就能序列化配置 (MjSpec 不可 pickle),
+        # 同时不动 PPO 内部持有的引用.
         alg = train_cfg.get("algorithm", {})
         sym = alg.get("symmetry_cfg") if isinstance(alg, dict) else None
         if isinstance(sym, dict) and "_env" in sym:
@@ -80,7 +79,7 @@ from .microduck_velstand_env_cfg import (
     make_microduck_velstand_env_cfg,
 )
 
-# Standard velocity task
+# 标准 velocity 任务
 register_mjlab_task(
     task_id="Mjlab-Velocity-Flat-MicroDuck",
     env_cfg=make_microduck_velocity_env_cfg(),
@@ -97,7 +96,7 @@ register_mjlab_task(
     runner_cls=MicroduckOnPolicyRunner,
 )
 
-# VelStand — walking + fall recovery + body pose control in one policy.
+# VelStand — 行走 + 摔倒恢复 + 身体姿态控制三合一策略.
 register_mjlab_task(
     task_id="Mjlab-VelStand-Flat-MicroDuck",
     env_cfg=make_microduck_velstand_env_cfg(),
@@ -114,7 +113,7 @@ register_mjlab_task(
     runner_cls=MicroduckOnPolicyRunner,
 )
 
-# Stand-up task — robot starts inverted (lying on back) and must stand up
+# Stand-up 任务 — 机器人初始倒置 (仰卧), 需要自行站起
 register_mjlab_task(
     task_id="Mjlab-StandUp-Flat-MicroDuck",
     env_cfg=make_microduck_standup_env_cfg(),
@@ -131,7 +130,7 @@ register_mjlab_task(
     runner_cls=MicroduckOnPolicyRunner,
 )
 
-# SitStand task — commanded sit ↔ stand in one policy, gently, head commandable
+# SitStand 任务 — 单策略命令式坐 ↔ 站, 动作柔和, 头部可被命令控制
 register_mjlab_task(
     task_id="Mjlab-SitStand-Flat-MicroDuck",
     env_cfg=make_microduck_sitstand_env_cfg(),
@@ -148,7 +147,7 @@ register_mjlab_task(
     runner_cls=MicroduckOnPolicyRunner,
 )
 
-# Ground-pick task — crouch, touch the ground with the mouth tip, return to stand
+# Ground-pick 任务 — 下蹲, 用嘴尖触地, 再回到站立
 register_mjlab_task(
     task_id="Mjlab-GroundPick-Flat-MicroDuck",
     env_cfg=make_microduck_ground_pick_env_cfg(),
@@ -157,8 +156,8 @@ register_mjlab_task(
     runner_cls=MicroduckOnPolicyRunner,
 )
 
-# BallKick task — kick a 70mm/15g ball forward hard with the right foot from a
-# standing start (flat terrain only — a ball on rough terrain is another task).
+# BallKick 任务 — 从站立起跑用右脚将 70mm/15g 的球向前猛踢
+# (仅平地 — 粗糙地形上的球属于另一任务).
 register_mjlab_task(
     task_id="Mjlab-BallKick-Flat-MicroDuck",
     env_cfg=make_microduck_ball_kick_env_cfg(),
@@ -175,7 +174,7 @@ register_mjlab_task(
     runner_cls=MicroduckOnPolicyRunner,
 )
 
-# Roller skate velocity task (passive-wheel model; historical task id kept)
+# 轮滑 velocity 任务 (被动轮模型; 保留历史 task id)
 register_mjlab_task(
     task_id="Mjlab-Velocity-Flat-MicroDuck-Rollers",
     env_cfg=make_microduck_velocity_rollers_env_cfg(),
@@ -184,7 +183,7 @@ register_mjlab_task(
     runner_cls=MicroduckOnPolicyRunner,
 )
 
-# Roller SWIZZLE task — clean classic swizzle (symmetric, feet grounded).
+# Roller SWIZZLE 任务 — 标准干净的 swizzle (对称, 双脚着地).
 register_mjlab_task(
     task_id="Mjlab-Velocity-Swizzle-MicroDuck",
     env_cfg=make_microduck_velocity_swizzle_env_cfg(),
@@ -209,7 +208,7 @@ register_mjlab_task(
     runner_cls=MicroduckOnPolicyRunner,
 )
 
-# Roller STANDUP — se relever sur rollers (policy dédiée, départ au sol).
+# Roller STANDUP — 在轮滑上起身 (专用策略, 从地面起步).
 register_mjlab_task(
     task_id="Mjlab-RollerStandUp-Flat-MicroDuck",
     env_cfg=make_microduck_roller_standup_env_cfg(),
@@ -218,7 +217,7 @@ register_mjlab_task(
     runner_cls=MicroduckOnPolicyRunner,
 )
 
-# Spin task — rotation rapide sur place, sur rollers (slot ground-pick).
+# Spin 任务 — 在轮滑上原地快速旋转 (使用 ground-pick 槽位).
 register_mjlab_task(
     task_id="Mjlab-Spin-Flat-MicroDuck",
     env_cfg=make_microduck_spin_env_cfg(),
@@ -227,7 +226,7 @@ register_mjlab_task(
     runner_cls=MicroduckOnPolicyRunner,
 )
 
-# Roulade — forward roll over the flat head top, land back on the feet.
+# Roulade — 越过平头向前滚翻, 落回双脚.
 register_mjlab_task(
     task_id="Mjlab-Roulade-Flat-MicroDuck",
     env_cfg=make_microduck_roulade_env_cfg(),
@@ -236,21 +235,21 @@ register_mjlab_task(
     runner_cls=MicroduckOnPolicyRunner,
 )
 
-# Backlash variants — ±1° serial gear play per servo + encoder-through-backlash
-# actuator feedback and joint obs (see tasks/backlash.py). Each family keeps its
-# base task's collision model: Velocity → robot_walk_backlash.xml,
-# VelStand/StandUp → robot_allcollisions_backlash.xml. Obs/action dims are
-# unchanged vs the base tasks.
+# Backlash 变体 — 每个舵机 ±1° 串联齿轮间隙 + 经由 backlash 的编码器
+# 反馈与关节观测 (见 tasks/backlash.py).每个任务族保留其基础任务的碰撞
+# 模型: Velocity → robot_walk_backlash.xml,
+# VelStand/StandUp → robot_allcollisions_backlash.xml.obs/action 维度
+# 与基础任务保持一致.
 from mjlab_microduck.robot.microduck_constants import (
     MICRODUCK_BACKLASH_ROBOT_CFG,
     MICRODUCK_ROLLERS_BACKLASH_ROBOT_CFG,
     MICRODUCK_WALK_BACKLASH_ROBOT_CFG,
 )
 
-# (task_id, make_fn, make_kwargs, rl_cfg, backlash robot cfg). Task ids mirror
-# the base ids with "-Backlash" inserted. Walk-model tasks get the walk
-# backlash robot, roller tasks the wheels+backlash robot, the rest the
-# allcollisions backlash robot — same model as their base task in each case.
+# (task_id, make_fn, make_kwargs, rl_cfg, backlash robot cfg).task id 在
+# 基础 id 中插入 "-Backlash".Walk 模型任务使用 walk backlash 机器人,
+# roller 任务使用 wheels+backlash 机器人, 其余使用 allcollisions
+# backlash 机器人 — 每种都与对应基础任务使用同一模型.
 _BL_ALLCOL = MICRODUCK_BACKLASH_ROBOT_CFG
 _BL_WALK = MICRODUCK_WALK_BACKLASH_ROBOT_CFG
 _BL_ROLLERS = MICRODUCK_ROLLERS_BACKLASH_ROBOT_CFG

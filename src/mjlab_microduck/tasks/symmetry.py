@@ -1,42 +1,42 @@
-"""Bilateral (left-right) symmetry augmentation for the microduck 61-D envs.
+"""microduck 61-D env 的左右对称性数据增强.
 
-Migrated 2026-08-13 from the old 51-D layout to the current 61-D family
-(velocity/velstand/standup/roulade — twist + head_command + body_command obs
-slots), and the augmented-obs output key fixed "policy" → "actor" (mjlab
-1.3.0 group naming; the old key would KeyError in rsl_rl 5.0.1's mirror-loss
-path — dead code until now since no env had symmetry enabled).
+于 2026-08-13 从旧的 51-D 布局迁移到当前的 61-D 任务族
+(velocity/velstand/standup/roulade — twist + head_command + body_command
+obs 槽位), 并修复了 augmented-obs 输出键由 "policy" → "actor" 的问题
+(mjlab 1.3.0 group 命名; 旧键在 rsl_rl 5.0.1 的 mirror-loss 路径中会
+KeyError — 此前因没有 env 启用 symmetry 而一直是死代码).
 
-Actor observation layout (61-dim flat tensor, concatenated in term insertion order):
-    [0:3]   base_ang_vel      (roll, pitch, yaw  — body-frame IMU)
-    [3:6]   projected_gravity (gx, gy, gz         — body-frame)
-    [6:20]  joint_pos_rel     (14 joints, relative to default pose)
-    [20:34] joint_vel_rel     (14 joints)
-    [34:48] last_action       (14 joints)
+Actor 观测布局 (61 维平坦张量, 按 term 插入顺序拼接):
+    [0:3]   base_ang_vel      (roll, pitch, yaw — 本体坐标系 IMU)
+    [3:6]   projected_gravity (gx, gy, gz       — 本体坐标系)
+    [6:20]  joint_pos_rel     (14 个关节, 相对于默认姿态)
+    [20:34] joint_vel_rel     (14 个关节)
+    [34:48] last_action       (14 个关节)
     [48:51] twist command     (lin_vel_x, lin_vel_y, ang_vel_z)
-    [51:55] head command      (neck_pitch, head_pitch, head_yaw, head_roll deltas)
-    [55:61] body command      (x, y, z, roll, pitch, yaw deltas)
+    [51:55] head command      (neck_pitch, head_pitch, head_yaw, head_roll 增量)
+    [55:61] body command      (x, y, z, roll, pitch, yaw 增量)
 
-Joint ordering within each 14-dim block (from robot_walk.xml body tree):
+每个 14 维块内的关节顺序 (来自 robot_walk.xml body 树):
     0: left_hip_yaw    5: neck_pitch    9:  right_hip_yaw
     1: left_hip_roll   6: head_pitch    10: right_hip_roll
     2: left_hip_pitch  7: head_yaw      11: right_hip_pitch
     3: left_knee       8: head_roll     12: right_knee
     4: left_ankle                       13: right_ankle
 
-Mirroring rules (left-right reflection about the sagittal plane):
-- Swap left legs (0-4) with right legs (9-13); midline joints (5-8) stay.
-- Negate after swap:
-    - hip_yaw, hip_roll: yaw/roll axes reverse under L-R reflection
-    - hip_pitch, knee, ankle: home frame uses opposite-sign conventions for
-      left vs right (e.g., left_hip_pitch = +0.6, right_hip_pitch = -0.6),
-      so relative deviations also negate
-    - head_yaw, head_roll: same yaw/roll reasoning
-    - neck_pitch, head_pitch: sagittal-plane joints, no sign change
-- base_ang_vel: negate roll ([0]) and yaw ([2]); pitch stays
-- projected_gravity: negate gy ([4]); gx and gz stay
-- twist command: negate lin_vel_y ([49]) and ang_vel_z ([50]); lin_vel_x stays
-- head command: negate head_yaw ([53]) and head_roll ([54]); pitches stay
-- body command: negate y ([56]), roll ([58]), yaw ([60]); x, z, pitch stay
+镜像规则 (绕矢状面的左右反射):
+- 左腿 (0-4) 与右腿 (9-13) 互换; 中线关节 (5-8) 不动.
+- 互换后取反:
+    - hip_yaw, hip_roll: yaw/roll 轴在左右反射下方向反转
+    - hip_pitch, knee, ankle: home 帧左右采用相反符号约定 (例如
+      left_hip_pitch = +0.6, right_hip_pitch = -0.6),
+      所以相对偏差也取反
+    - head_yaw, head_roll: 同样的 yaw/roll 推理
+    - neck_pitch, head_pitch: 矢状面关节, 符号不变
+- base_ang_vel: roll ([0]) 与 yaw ([2]) 取反; pitch 不变
+- projected_gravity: gy ([4]) 取反; gx 与 gz 不变
+- twist command: lin_vel_y ([49]) 与 ang_vel_z ([50]) 取反; lin_vel_x 不变
+- head command: head_yaw ([53]) 与 head_roll ([54]) 取反; pitch 不变
+- body command: y ([56]), roll ([58]), yaw ([60]) 取反; x, z, pitch 不变
 """
 
 from dataclasses import dataclass
@@ -48,7 +48,7 @@ from tensordict import TensorDict
 
 @dataclass
 class PpoWithSymmetryCfg(RslRlPpoAlgorithmCfg):
-    """PPO algorithm config extended with an optional symmetry_cfg field."""
+    """PPO 算法 cfg, 扩展了一个可选的 symmetry_cfg 字段."""
 
     symmetry_cfg: dict | None = None
 
@@ -61,18 +61,18 @@ SYMMETRY_CFG = {
 }
 
 # ---------------------------------------------------------------------------
-# Permutation and sign tables
+# 置换与符号表
 # ---------------------------------------------------------------------------
 
-# Within a 14-joint block: left (0-4) <-> right (9-13), midline (5-8) fixed
+# 14 关节块内: 左 (0-4) <-> 右 (9-13), 中线 (5-8) 固定
 _JOINT_PERM: list[int] = [9, 10, 11, 12, 13, 5, 6, 7, 8, 0, 1, 2, 3, 4]
 
-# Signs applied AFTER permutation for each joint position
+# 置换后施加到每个关节位置的符号
 _JOINT_SIGN: list[float] = [-1, -1, -1, -1, -1, 1, 1, -1, -1, -1, -1, -1, -1, -1]
 
-# Full 61-dim actor obs permutation (all command slots mirror in place)
+# 完整 61 维 actor obs 置换 (所有 command 槽原地镜像)
 _OBS_PERM: list[int] = (
-    [0, 1, 2]  # base_ang_vel (indices unchanged)
+    [0, 1, 2]  # base_ang_vel (索引不变)
     + [3, 4, 5]  # projected_gravity
     + [6 + j for j in _JOINT_PERM]  # joint_pos
     + [20 + j for j in _JOINT_PERM]  # joint_vel
@@ -82,19 +82,19 @@ _OBS_PERM: list[int] = (
     + [55, 56, 57, 58, 59, 60]  # body command
 )
 
-# Full 61-dim sign vector
+# 完整 61 维符号向量
 _OBS_SIGN: list[float] = (
-    [-1.0, 1.0, -1.0]  # base_ang_vel: negate roll, yaw
-    + [1.0, -1.0, 1.0]  # projected_gravity: negate gy
+    [-1.0, 1.0, -1.0]  # base_ang_vel: 取反 roll, yaw
+    + [1.0, -1.0, 1.0]  # projected_gravity: 取反 gy
     + _JOINT_SIGN  # joint_pos
     + _JOINT_SIGN  # joint_vel
     + _JOINT_SIGN  # last_action
-    + [1.0, -1.0, -1.0]  # twist: negate lin_vel_y, ang_vel_z
-    + [1.0, 1.0, -1.0, -1.0]  # head: negate head_yaw, head_roll
-    + [1.0, -1.0, 1.0, -1.0, 1.0, -1.0]  # body: negate y, roll, yaw
+    + [1.0, -1.0, -1.0]  # twist: 取反 lin_vel_y, ang_vel_z
+    + [1.0, 1.0, -1.0, -1.0]  # head: 取反 head_yaw, head_roll
+    + [1.0, -1.0, 1.0, -1.0, 1.0, -1.0]  # body: 取反 y, roll, yaw
 )
 
-# Cache tensors per device to avoid reallocating on every call
+# 按设备缓存张量, 避免每次调用都重新分配
 _cache: dict[torch.device, tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] = {}
 
 
@@ -111,7 +111,7 @@ def _get_tensors(
 
 
 # ---------------------------------------------------------------------------
-# Public augmentation function
+# 公共数据增强函数
 # ---------------------------------------------------------------------------
 
 
@@ -120,22 +120,21 @@ def microduck_vel_symmetry(
     obs: TensorDict | None,
     actions: torch.Tensor | None,
 ) -> tuple[TensorDict | None, torch.Tensor | None]:
-    """Bilateral symmetry augmentation / mirror function for the microduck vel env.
+    """microduck vel env 的左右对称数据增强 / 镜像函数.
 
-    Returns [original, mirrored] concatenated along the batch dimension.
-    Compatible with the rsl_rl PPO ``symmetry_cfg`` interface (use_data_augmentation
-    and/or use_mirror_loss).
+沿 batch 维返回 [原始, 镜像] 拼接结果.与 rsl_rl PPO 的 ``symmetry_cfg``
+接口兼容 (use_data_augmentation 和/或 use_mirror_loss).
 
-    Args:
-        env: The vectorised environment (unused, present for interface compatibility).
-        obs: TensorDict with keys ``"policy"`` and ``"critic"``, shape ``[B, obs_dim]``.
-             Pass ``None`` when only actions need to be mirrored.
-        actions: Float tensor of shape ``[B, 14]``.
-                 Pass ``None`` when only obs need to be mirrored.
+Args:
+    env: 向量化环境 (未使用, 仅为接口兼容而保留).
+    obs: TensorDict, 含键 ``"policy"`` 与 ``"critic"``, shape ``[B, obs_dim]``.
+         只需镜像 actions 时传 ``None``.
+    actions: float tensor, shape ``[B, 14]``.
+             只需镜像 obs 时传 ``None``.
 
-    Returns:
-        Tuple ``(aug_obs, aug_actions)`` where each non-None input is doubled
-        along the batch axis as ``[original; mirrored]``.
+Returns:
+    元组 ``(aug_obs, aug_actions)``, 每个非 None 输入沿 batch 轴翻倍为
+    ``[原始; 镜像]``.
     """
     aug_obs: TensorDict | None = None
     aug_actions: torch.Tensor | None = None
@@ -146,10 +145,10 @@ def microduck_vel_symmetry(
         actor_sym = actor_orig[:, obs_perm] * obs_sign
 
         critic_orig: torch.Tensor = obs["critic"]
-        # Critic obs mirroring is not implemented (not needed for use_mirror_loss).
-        # For use_data_augmentation the critic sees a repeated unmirrored obs,
-        # which is a harmless approximation since the critic uses privileged info
-        # not present in the actor obs.
+        # Critic obs 镜像未实现 (use_mirror_loss 不需要).
+        # 对 use_data_augmentation, critic 看到的是重复未镜像的 obs,
+        # 这是个无害的近似, 因为 critic 使用 actor obs 中不存在的
+        # 特权信息.
         critic_repeated = torch.cat([critic_orig, critic_orig], dim=0)
 
         aug_obs = TensorDict(

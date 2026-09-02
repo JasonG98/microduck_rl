@@ -1,8 +1,9 @@
-"""XL330 test-bench RL environment.
+"""XL330 测试台 RL 环境.
 
-Single-DOF fixed-base joint tracking task for sim2real validation.  Starts at 0 and must reach a target angle uniformly
-sampled in [-80°, 80°].  Uses the same observation noise and action-smoothness regularization as the microduck velocity
-env, with NO domain randomization so the learned policy can be transferred directly to the real XL330 testbench.
+用于 sim2real 验证的单自由度固定基座关节跟踪任务.从 0 出发, 必须到达在
+[-80°, 80°] 内均匀采样的目标角度.使用与 microduck velocity env 相同的
+观测噪声和动作平滑性正则, 但不做 domain randomization, 以便学到的策略能
+直接迁移到真实 XL330 测试台.
 """
 
 from __future__ import annotations
@@ -41,19 +42,19 @@ from mjlab.viewer import ViewerConfig
 from mjlab_microduck.robot.testbench_constants import XL330_TESTBENCH_ROBOT_CFG
 
 # ----------------------------------------------------------------------------
-# Target angle command (single joint)
+# 目标角度 command (单关节)
 # ----------------------------------------------------------------------------
 
 TESTBENCH_MAX_ANGLE_RAD = math.radians(80.0)
 
 
 class TargetAngleCommand(CommandTerm):
-    """Uniform single-scalar target angle command."""
+    """单标量均匀分布的目标角度 command."""
 
     cfg: TargetAngleCommandCfg
 
     def __init__(self, cfg: TargetAngleCommandCfg, env: ManagerBasedRlEnv):
-        """Initialize the command term and cache the tracked joint id."""
+        """初始化 command term, 并缓存被跟踪的 joint id."""
         super().__init__(cfg, env)
         self.robot: Entity = env.scene[cfg.asset_name]
         self._target = torch.zeros(self.num_envs, 1, device=self.device)
@@ -63,7 +64,7 @@ class TargetAngleCommand(CommandTerm):
 
     @property
     def command(self) -> torch.Tensor:
-        """The current target angle command tensor."""
+        """当前目标角度 command 张量."""
         return self._target
 
     def _resample_command(self, env_ids: torch.Tensor) -> None:
@@ -80,7 +81,7 @@ class TargetAngleCommand(CommandTerm):
 
 @dataclass(kw_only=True)
 class TargetAngleCommandCfg(CommandTermCfg):
-    """Dataclass cfg for the uniform single-joint target angle command."""
+    """单关节均匀目标角度 command 的 dataclass cfg."""
 
     class_type: type[CommandTerm] = TargetAngleCommand
     asset_name: str = "robot"
@@ -100,7 +101,7 @@ def target_angle_tracking(
     std: float,
     asset_cfg: SceneEntityCfg,
 ) -> torch.Tensor:
-    """Exp(-error^2 / std^2) reward for single-joint position tracking."""
+    """单关节位置跟踪的 Exp(-error^2 / std^2) reward."""
     target = env.command_manager.get_command(command_name)[:, 0]
     asset: Entity = env.scene[asset_cfg.name]
     joint_ids = asset_cfg.joint_ids
@@ -112,25 +113,25 @@ def target_angle_tracking(
 
 
 # ----------------------------------------------------------------------------
-# Env factory
+# Env 工厂
 # ----------------------------------------------------------------------------
 
 
 def make_testbench_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    """Build the XL330 testbench env cfg (single-DOF tracking, no domain randomization)."""
+    """构建 XL330 测试台 env cfg (单自由度跟踪, 无 domain randomization)."""
     asset_cfg_full = SceneEntityCfg("robot", joint_names=("1",))
 
-    # Observations (base noise copied from microduck velocity env; joint_vel
-    # noise here is 10× larger to mirror the noisy XL330 firmware velocity read).
+    # 观测 (基础噪声复制自 microduck velocity env; 此处 joint_vel
+    # 噪声放大 10 倍以匹配 XL330 固件有噪的速度读数).
     joint_pos_term = ObservationTermCfg(
         func=base_mdp.joint_pos_rel,
         noise=Unoise(n_min=-0.0006, n_max=0.0006),
     )
     joint_vel_term = ObservationTermCfg(
         func=base_mdp.joint_vel_rel,
-        # 10× the microduck velocity env's joint_vel noise (0.024 → 0.24) — the
-        # XL330 firmware velocity read is much noisier than MuJoCo's instantaneous
-        # qdot, so we inject more observation corruption to force robustness.
+        # 10× microduck velocity env 的 joint_vel 噪声 (0.024 → 0.24) — XL330
+        # 固件速度读数远比 MuJoCo 瞬时 qdot 噪声大, 因此注入更多观测扰动
+        # 以强制鲁棒性.
         noise=Unoise(n_min=-0.24, n_max=0.24),
         delay_min_lag=1,
         delay_max_lag=1,
@@ -163,8 +164,8 @@ def make_testbench_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         ),
     }
 
-    # Actions.  `TESTBENCH_ACTION_SCALE` env var lets you sweep the action scale
-    # from the command line without editing this file, e.g.
+    # Actions.`TESTBENCH_ACTION_SCALE` 环境变量允许从命令行扫描 action scale
+    # 而无需编辑此文件, 例如:
     #     TESTBENCH_ACTION_SCALE=0.5 uv run python -m mjlab.scripts.train ...
     action_scale = float(os.environ.get("TESTBENCH_ACTION_SCALE", "1.0"))
     actions = {
@@ -200,7 +201,7 @@ def make_testbench_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         ),
     }
 
-    # Rewards (same regularization recipe as the microduck velocity env)
+    # Rewards (与 microduck velocity env 相同的正则配方)
     rewards = {
         "track_target": RewardTermCfg(
             func=target_angle_tracking,

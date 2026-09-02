@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot comparison between real and simulated observations using Plotly."""
+"""使用 Plotly 绘制真实与仿真观测值的对比图."""
 
 import argparse
 import pickle
@@ -11,7 +11,7 @@ from plotly.subplots import make_subplots
 
 
 def load_observations(pkl_path: str):
-    """Load observations from pickle file."""
+    """从 pickle 文件加载观测值."""
     with Path(pkl_path).open("rb") as f:
         data = pickle.load(f)
 
@@ -20,10 +20,10 @@ def load_observations(pkl_path: str):
             observations = data["observations"]
             timestamps = data["timestamps"]
         else:
-            raise ValueError("Dictionary must contain 'observations' and 'timestamps' keys")
+            raise ValueError("字典必须包含 'observations' 和 'timestamps' 键")
     elif isinstance(data, list):
         if len(data) == 0:
-            raise ValueError("Empty data list")
+            raise ValueError("数据列表为空")
 
         if isinstance(data[0], dict) and "timestamp" in data[0] and "observation" in data[0]:
             timestamps = [item["timestamp"] for item in data]
@@ -35,17 +35,17 @@ def load_observations(pkl_path: str):
             observations = data
             timestamps = [i * 0.02 for i in range(len(observations))]
     else:
-        raise ValueError(f"Unsupported data format: {type(data)}")
+        raise ValueError(f"不支持的数据格式: {type(data)}")
 
     return np.array(observations), np.array(timestamps)
 
 
 def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
-    """Plot comparison between real and simulated observations using Plotly.
+    """使用 Plotly 绘制真实与仿真观测值的对比图.
 
-    If sim_obs is None, only plots real data.
+    如果 sim_obs 为 None, 则只绘制真实数据.
     """
-    # Joint names
+    # 关节名称
     joint_names = [
         "L_hip_yaw",
         "L_hip_roll",
@@ -72,26 +72,26 @@ def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
     joint_vel_start = 20
     action_start = 34
 
-    # Create subplot titles with sections
+    # 创建带分区的子图标题
     subplot_titles = []
 
-    # Base angular velocity (3)
+    # 基座角速度 (3)
     subplot_titles.extend(["<b>BASE ANG VEL</b><br>ω_x", "ω_y", "ω_z", ""])
 
-    # Raw accelero (3)
+    # 原始加速度计 (3)
     subplot_titles.extend(["<b>Raw Accelero</b><br>g_x", "g_y", "g_z", ""])
 
-    # Joint positions (14 + 2 empty)
+    # 关节位置 (14 + 2 个空位)
     subplot_titles.append(f"<b>JOINT POSITIONS</b><br>{joint_names[0]}")
     subplot_titles.extend(joint_names[1:14])
     subplot_titles.extend(["", ""])
 
-    # Joint velocities (14 + 2 empty)
+    # 关节速度 (14 + 2 个空位)
     subplot_titles.append(f"<b>JOINT VELOCITIES</b><br>{joint_names[0]}")
     subplot_titles.extend(joint_names[1:14])
     subplot_titles.extend(["", ""])
 
-    # Actions (14 + 2 empty)
+    # 动作 (14 + 2 个空位)
     subplot_titles.append(f"<b>ACTIONS</b><br>{joint_names[0]}")
     subplot_titles.extend(joint_names[1:14])
     subplot_titles.extend(["", ""])
@@ -108,10 +108,10 @@ def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
 
     plot_idx = 0
 
-    # Track data for common scaling
+    # 跟踪数据以便统一缩放
 
     def add_traces(row, col, real_data, sim_data=None, y_range=None):
-        """Helper to add real and sim traces to a subplot."""
+        """向子图添加真实和仿真 trace 的辅助函数."""
         fig.add_trace(
             go.Scatter(
                 x=real_ts,
@@ -144,7 +144,7 @@ def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
     joint_vel_data = []
     action_data = []
 
-    # 1. Base angular velocity (3 subplots)
+    # 1. 基座角速度 (3 个子图)
     for i in range(3):
         row, col = divmod(plot_idx, 4)
         row += 1
@@ -161,10 +161,10 @@ def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
         fig.update_yaxes(title_text="rad/s", row=row, col=col)
         plot_idx += 1
 
-    # Empty slot
+    # 空位
     plot_idx += 1
 
-    # 2. Raw accelero (3 subplots)
+    # 2. 原始加速度计 (3 个子图)
     for i in range(3):
         row, col = divmod(plot_idx, 4)
         row += 1
@@ -181,10 +181,10 @@ def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
         fig.update_yaxes(title_text="g", row=row, col=col)
         plot_idx += 1
 
-    # Empty slot
+    # 空位
     plot_idx += 1
 
-    # 3. Joint positions (14 subplots)
+    # 3. 关节位置 (14 个子图)
     for i in range(14):
         row, col = divmod(plot_idx, 4)
         row += 1
@@ -202,10 +202,10 @@ def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
         fig.update_yaxes(title_text="rad", row=row, col=col)
         plot_idx += 1
 
-    # Skip 2 empty slots
+    # 跳过 2 个空位
     plot_idx += 2
 
-    # 4. Joint velocities (14 subplots)
+    # 4. 关节速度 (14 个子图)
     for i in range(14):
         row, col = divmod(plot_idx, 4)
         row += 1
@@ -223,10 +223,10 @@ def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
         fig.update_yaxes(title_text="rad/s", row=row, col=col)
         plot_idx += 1
 
-    # Skip 2 empty slots
+    # 跳过 2 个空位
     plot_idx += 2
 
-    # 5. Actions (14 subplots)
+    # 5. 动作 (14 个子图)
     for i in range(14):
         row, col = divmod(plot_idx, 4)
         row += 1
@@ -245,7 +245,7 @@ def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
         fig.update_xaxes(title_text="Time (s)", row=row, col=col)
         plot_idx += 1
 
-    # Set common y-ranges for each group
+    # 为每组设置统一的 y 轴范围
     def compute_range(data_list):
         if not data_list:
             return None
@@ -260,39 +260,39 @@ def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
     joint_vel_range = compute_range(joint_vel_data)
     action_range = compute_range(action_data)
 
-    # Apply common ranges
+    # 应用统一范围
     plot_idx = 0
 
-    for _ in range(3):  # Base ang vel
+    for _ in range(3):  # 基座角速度
         row, col = divmod(plot_idx, 4)
         fig.update_yaxes(range=base_ang_vel_range, row=row + 1, col=col + 1)
         plot_idx += 1
     plot_idx += 1
 
-    for _ in range(3):  # Gravity
+    for _ in range(3):  # 重力
         row, col = divmod(plot_idx, 4)
         fig.update_yaxes(range=gravity_range, row=row + 1, col=col + 1)
         plot_idx += 1
     plot_idx += 1
 
-    for _ in range(14):  # Joint pos
+    for _ in range(14):  # 关节位置
         row, col = divmod(plot_idx, 4)
         fig.update_yaxes(range=joint_pos_range, row=row + 1, col=col + 1)
         plot_idx += 1
     plot_idx += 2
 
-    for _ in range(14):  # Joint vel
+    for _ in range(14):  # 关节速度
         row, col = divmod(plot_idx, 4)
         fig.update_yaxes(range=joint_vel_range, row=row + 1, col=col + 1)
         plot_idx += 1
     plot_idx += 2
 
-    for _ in range(14):  # Actions
+    for _ in range(14):  # 动作
         row, col = divmod(plot_idx, 4)
         fig.update_yaxes(range=action_range, row=row + 1, col=col + 1)
         plot_idx += 1
 
-    # Update layout
+    # 更新布局
     title = "Real vs Simulated Observations Comparison" if sim_obs is not None else "Real Robot Observations"
 
     fig.update_layout(
@@ -309,41 +309,41 @@ def plot_comparison(real_obs, real_ts, sim_obs=None, sim_ts=None):
 
 
 def main():
-    """Compare real and simulated observations with interactive Plotly plots."""
-    parser = argparse.ArgumentParser(description="Compare real and simulated observations (Plotly version)")
-    parser.add_argument("real_pkl", type=str, help="Path to .pkl file with real robot observations")
+    """用交互式 Plotly 图表对比真实与仿真观测值."""
+    parser = argparse.ArgumentParser(description="对比真实与仿真观测值 (Plotly 版本)")
+    parser.add_argument("real_pkl", type=str, help="真实机器人观测值的 .pkl 文件路径")
     parser.add_argument(
         "sim_pkl",
         type=str,
         nargs="?",
         default=None,
-        help="Path to .pkl file with simulated observations (optional)",
+        help="仿真观测值的 .pkl 文件路径 (可选)",
     )
     args = parser.parse_args()
 
-    # Check if files exist
+    # 检查文件是否存在
     if not Path(args.real_pkl).exists():
-        print(f"Error: {args.real_pkl} not found")
+        print(f"错误: 未找到 {args.real_pkl}")
         return 1
 
-    # Load observations
-    print(f"Loading real observations from {args.real_pkl}...")
+    # 加载观测值
+    print(f"正在从 {args.real_pkl} 加载真实观测值...")
     real_obs, real_ts = load_observations(args.real_pkl)
-    print(f"Loaded {len(real_obs)} real observations (shape: {real_obs.shape})")
+    print(f"已加载 {len(real_obs)} 条真实观测值 (shape: {real_obs.shape})")
 
     if args.sim_pkl:
         if not Path(args.sim_pkl).exists():
-            print(f"Error: {args.sim_pkl} not found")
+            print(f"错误: 未找到 {args.sim_pkl}")
             return 1
-        print(f"Loading simulated observations from {args.sim_pkl}...")
+        print(f"正在从 {args.sim_pkl} 加载仿真观测值...")
         sim_obs, sim_ts = load_observations(args.sim_pkl)
-        print(f"Loaded {len(sim_obs)} simulated observations (shape: {sim_obs.shape})")
+        print(f"已加载 {len(sim_obs)} 条仿真观测值 (shape: {sim_obs.shape})")
     else:
-        print("No sim data provided, plotting real data only")
+        print("未提供仿真数据, 只绘制真实数据")
         sim_obs, sim_ts = None, None
 
-    # Plot comparison
-    print("\nGenerating interactive comparison plots...")
+    # 绘制对比图
+    print("\n正在生成交互式对比图...")
     plot_comparison(real_obs, real_ts, sim_obs, sim_ts)
 
     return 0

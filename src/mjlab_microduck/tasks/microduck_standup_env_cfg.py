@@ -1,118 +1,110 @@
-"""Microduck *stand* task (v1.5) — specialized: sitting pose → standing.
+"""Microduck *站立* 任务 (v1.5) — 专门: 坐姿 → 站立.
 
-Episodic policy that gently rises from the sitting keyframe to the standing keyframe. Companion to the sit env —
-together they form a clean sit↔stand pair, each policy doing one direction.
+Episodic policy 从坐姿关键帧平缓上升到站立关键帧. 与 sit 环境配对 — 共同
+构成干净的 坐↔站 对, 每个 policy 负责一个方向.
 
-Reset:  sitting keyframe (trunk z ≈ 0.07, knees/ankles bent, head at HOME). Target: standing keyframe (trunk z ≈ 0.12,
-HOME joints). Reward design (mirror of sit env): a single fixed target is rewarded from t=0 to end of episode;
-gentleness is enforced via |a_z| only; smoothness is enforced by the usual sim2real regularisers. No trajectory
-waypoints, no episode-progress gating — the policy is free to discover its own rise path.
+Reset: 坐姿关键帧 (躯干 z ≈ 0.07, 膝/踝弯曲, 头部在 HOME). 目标: 站立关键帧
+(躯干 z ≈ 0.12, HOME 关节). 奖励设计 (sit 环境的镜像): 单一固定目标从 t=0
+奖励到 episode 结束; 平缓性仅通过 |a_z| 强制; 平滑性由常规 sim2real 正则项
+强制. 无轨迹 waypoints, 无 episode 进度门控 — policy 自由发现其自己的上升
+路径.
 
-Body control (reintroduced 2026-07-29): once standing, the policy tracks a commanded trunk delta [z, roll, pitch] from
-the nominal stand (the real body_pose command in the previously zero-padded 6D obs slot). Kicks in at iter 2500 via the
-body-control curricula at the bottom of this file, after the ground_state_mix recovery curriculum has finished ramping.
+身体控制 (2026-07-29 重新引入): 站立后, policy 跟踪来自名义站立的指令躯干
+delta [z, roll, pitch] (前零填充 6D obs 槽位中的真实 body_pose 指令). 在 iter
+2500 通过本文件底部的身体控制课程启动, 在 ground_state_mix 恢复课程完成渐升
+之后.
 """
 
 import math
 from copy import deepcopy
 
-# Symmetry
+# 对称性
 ENABLE_SYMMETRY = False
 
-# ── Domain randomisation (matched to the velocity env for sim2real parity) ────
+# ── Domain randomisation (与 velocity 环境对齐以保证 sim2real 一致) ────
 ENABLE_COM_RANDOMIZATION = True
-ENABLE_HEAD_COM_RANDOMIZATION = True  # match velocity: randomize head-assembly CoM
-ENABLE_KP_RANDOMIZATION = False  # match velocity (OFF)
-ENABLE_KD_RANDOMIZATION = False  # match velocity (OFF)
-ENABLE_MASS_INERTIA_RANDOMIZATION = True  # match velocity: dr.pseudo_inertia (mass+inertia)
-ENABLE_JOINT_FRICTION_RANDOMIZATION = True  # match velocity: FrictionDRBamActuator.friction_scale
-ENABLE_ARMATURE_RANDOMIZATION = True  # match velocity: reflected rotor inertia
+ENABLE_HEAD_COM_RANDOMIZATION = True  # 匹配 velocity: 随机化头部组件 CoM
+ENABLE_KP_RANDOMIZATION = False  # 匹配 velocity (OFF)
+ENABLE_KD_RANDOMIZATION = False  # 匹配 velocity (OFF)
+ENABLE_MASS_INERTIA_RANDOMIZATION = True  # 匹配 velocity: dr.pseudo_inertia (mass+inertia)
+ENABLE_JOINT_FRICTION_RANDOMIZATION = True  # 匹配 velocity: FrictionDRBamActuator.friction_scale
+ENABLE_ARMATURE_RANDOMIZATION = True  # 匹配 velocity: 反映转子惯量
 ENABLE_VELOCITY_PUSHES = True
-ENABLE_IMU_ORIENTATION_RANDOMIZATION = True  # match velocity: obs-level per-env misalignment
-ENABLE_ENCODER_BIAS = True  # match velocity: per-env joint encoder offset (actor obs)
+ENABLE_IMU_ORIENTATION_RANDOMIZATION = True  # 匹配 velocity: obs 级每环境错位
+ENABLE_ENCODER_BIAS = True  # 匹配 velocity: 每环境关节编码器偏移 (actor obs)
 
-# ── Ranges (matched to the velocity env) ──────────────────────────────────────
+# ── 范围 (与 velocity 环境对齐) ──────────────────────────────────────────────
 COM_RANDOMIZATION_RANGE = (
-    0.003  # ramped to 0.015 via com_range curriculum (velocity's 2026-07 audit cap; was 0.02 here)
+    0.003  # 通过 com_range 课程渐升到 0.015 (velocity 2026-07 审计上限; 此处原为 0.02)
 )
-HEAD_COM_RANDOMIZATION_RANGE = 0.003  # ramped to 0.01 via head_com_range curriculum
+HEAD_COM_RANDOMIZATION_RANGE = 0.003  # 通过 head_com_range 课程渐升到 0.01
 MASS_INERTIA_RANDOMIZATION_RANGE = (0.95, 1.05)
 ARMATURE_RANDOMIZATION_RANGE = (0.9, 1.1)
 JOINT_FRICTION_RANDOMIZATION_RANGE = (0.9, 1.1)
 ENCODER_BIAS_RANGE = (-0.015, 0.015)
-KP_RANDOMIZATION_RANGE = (0.85, 1.15)  # unused (kp DR off)
-KD_RANDOMIZATION_RANGE = (0.9, 1.1)  # unused (kd DR off)
+KP_RANDOMIZATION_RANGE = (0.85, 1.15)  # 未使用 (kp DR off)
+KD_RANDOMIZATION_RANGE = (0.9, 1.1)  # 未使用 (kd DR off)
 VELOCITY_PUSH_INTERVAL_S = (3.0, 6.0)
-# Match velocity's ±0.3 (velocity was itself softened from ±0.5 in the 2026-07
-# audit). The push curriculum below still ramps 0 → ±0.08 → this final value so
-# the sit-rise bootstrap isn't shoved around from step 0 (velocity pushes at
-# full strength from step 0, but it starts standing, not seated/prone).
+# 匹配 velocity 的 ±0.3 (velocity 在 2026-07 审计中从 ±0.5 软化). 下方推力
+# 课程仍按 0 → ±0.08 → 此最终值渐升, 使坐起 bootstrap 不从 step 0 起被推
+# 来推去 (velocity 从 step 0 起全强度推力, 但它从站立开始, 非坐/俯卧).
 VELOCITY_PUSH_RANGE = (-0.3, 0.3)
-IMU_ORIENTATION_RANDOMIZATION_ANGLE = 6.0  # match velocity (was 2.0 — pre-audit value; real IMU has ~5° systematic pitch error + estimator drift, 2° trained too narrow a band)
+IMU_ORIENTATION_RANDOMIZATION_ANGLE = 6.0  # 匹配 velocity (原为 2.0 — 审计前值; 真实 IMU 有 ~5° 系统俯仰误差 + 估计器漂移, 2° 训练的带太窄)
 
-# Episode length: long enough for a gentle rise + brief stabilisation.
+# Episode 长度: 足够用于平缓上升 + 短暂稳定.
 EPISODE_LENGTH_S = 6.0
 
-# ── Sitting source pose (asset.data.joint_pos index → angle in rad) ───────────
-# Must match the *actual end-state* of the sit policy. Mirrors the sit env's
-# SITTING_TARGET_OVERRIDES (microduck_sit_env_cfg.py) — the swept stable
-# equilibrium pose (knee ±1.35 ≈ 77°, hip_pitch ∓0.4079 = slight fwd lean,
-# ankles 0). Keep the two in sync: this reset IS the sit→stand hand-off.
-# Neck/head intentionally omitted → reset stays at HOME so the standup policy
-# starts from exactly where the sit policy converges.
-# Articulation joint indices under mjlab 1.3.0 + canonical BAM. The passive jaw
-# joints are NO LONGER part of the articulation (excluded from qpos), so the
-# layout is the clean 14-joint order: 0-4 left leg, 5-8 neck/head, 9-13 right leg.
-# (Previously passive_1/passive_2 sat at 9,10 and shifted the right leg to 11-15.)
+# ── 坐姿源姿态 (asset.data.joint_pos 索引 → 角度, rad) ───────────
+# 必须匹配 sit policy 的 *实际终态*. 镜像 sit 环境的 SITTING_TARGET_OVERRIDES
+# (microduck_sit_env_cfg.py) — 扫掠稳定平衡姿态 (膝 ±1.35 ≈ 77°,
+# hip_pitch ∓0.4079 = 微前倾, 踝 0). 保持两者同步: 此 reset 就是 sit→站
+# 交接. 颈/头有意省略 → reset 保持 HOME, 使 standup policy 从 sit policy 收敛
+# 的精确位置开始.
+# mjlab 1.3.0 + 规范 BAM 下的关节索引. 被动颚关节不再是 articulation 一部分
+# (从 qpos 排除), 所以布局是干净的 14 关节顺序: 0-4 左腿, 5-8 颈/头, 9-13 右腿.
+# (此前 passive_1/passive_2 位于 9,10, 使右腿移到 11-15.)
 SITTING_JOINT_OVERRIDES = {
-    1: 0.0,  # left  hip_roll   (HOME -0.0873)
-    2: -0.4079,  # left  hip_pitch  (HOME -0.4579; +0.05 = slight fwd lean)
-    3: 1.35,  # left  knee       (HOME -0.0049)
-    4: 0.0,  # left  ankle      (HOME +0.4530)
-    10: 0.0,  # right hip_roll   (HOME +0.0873)
-    11: 0.4079,  # right hip_pitch  (HOME +0.4579)
-    12: -1.35,  # right knee       (HOME +0.0049)
-    13: 0.0,  # right ankle      (HOME -0.4530)
+    1: 0.0,  # 左  hip_roll   (HOME -0.0873)
+    2: -0.4079,  # 左  hip_pitch  (HOME -0.4579; +0.05 = 微前倾)
+    3: 1.35,  # 左  knee       (HOME -0.0049)
+    4: 0.0,  # 左  ankle      (HOME +0.4530)
+    10: 0.0,  # 右 hip_roll   (HOME +0.0873)
+    11: 0.4079,  # 右 hip_pitch  (HOME +0.4579)
+    12: -1.35,  # 右 knee       (HOME +0.0049)
+    13: 0.0,  # 右 ankle      (HOME -0.4530)
 }
 
 _LEG_JOINTS = [0, 1, 2, 3, 4, 9, 10, 11, 12, 13]
 _NECK_JOINTS = [5, 6, 7, 8]
 
-# Trunk height targets (m).
-# SIT_Z matches the sit env's measured seated equilibrium (trunk z at rest in
-# the swept stable pose above). Was 0.07 (old robot); keep in sync with
-# microduck_sit_env_cfg.py.
+# 躯干高度目标 (m).
+# SIT_Z 匹配 sit 环境实测坐姿平衡 (上述扫掠稳定姿态中静止时的躯干 z).
+# 原为 0.07 (旧机器人); 与 microduck_sit_env_cfg.py 保持同步.
 SIT_Z = 0.060
-# STAND_Z = empirically-measured trunk z at the natural standing equilibrium
-# (HOME joint pose, vertical trunk). Previously was 0.120 — 5 mm above
-# what's mechanically reachable at HOME — which forced the policy into a
-# back-lean compromise to satisfy the impossible height target. Measured
-# via the velocity policy holding the robot still at zero command: 115 mm.
+# STAND_Z = 自然站立平衡处实测的躯干 z (HOME 关节姿态, 垂直躯干). 此前为
+# 0.120 — 比 HOME 处机械可达高 5 mm — 这迫使 policy 进入后倾妥协以满足不可能
+# 的高度目标. 通过 velocity policy 在零指令下保持机器人静止实测: 115 mm.
 STAND_Z = 0.115
 
-# ── Body pose command (reintroduced 2026-07-29) ───────────────────────────────
-# Master toggle. OFF restores the previous env exactly: no body_pose command,
-# zero-padded body_command obs slot (obs stays 61D either way), no tracking
-# reward, no body-control curricula (including the conflict-relax stages on
-# height_stand_sharp / upright_sharp / standing_composite).
+# ── 身体姿态指令 (2026-07-29 重新引入) ───────────────────────────────
+# 主开关. OFF 精确恢复先前环境: 无 body_pose 指令, 零填充 body_command obs
+# 槽位 (obs 仍为 61D), 无跟踪奖励, 无身体控制课程 (包括
+# height_stand_sharp / upright_sharp / standing_composite 上的冲突放松阶段).
 ENABLE_BODY_CONTROL = True
-# 6D command slot [x, y, z, roll, pitch, yaw] for obs parity with velocity/
-# velstand, but only z/roll/pitch are tracked (axis_weights below) — the same
-# 3 axes as the original standup body control and the runtime interface.
-# x/y/yaw stay at a tiny "alive" range forever: the policy learns to ignore
-# them (they're reward-uncorrelated noise) instead of leaving dead weights.
-# z range is ASYMMETRIC: STAND_Z is the natural equilibrium at HOME, so there
-# is plenty of crouch below it but only ~1 cm of leg extension above it.
-# Angles capped at ±15°: velocity body-control run 1 showed ±20° trains
-# twitchy/overdriven tilting.
-BODY_CMD_MAX_Z_DOWN = 0.04  # m, crouch below STAND_Z
-BODY_CMD_MAX_Z_UP = 0.030  # m, extend above STAND_Z
-BODY_CMD_MAX_ANGLE = math.radians(15)  # rad, trunk pitch/roll
-BODY_CMD_ALIVE_XY = 0.005  # m, permanent x/y noise range
-BODY_CMD_ALIVE_ANGLE = 0.05  # rad, stage-0 / permanent-yaw range
-# Exact-zero command probability at resample: keeps the deployment idle case
-# ("stand at nominal, no command") trained (velocity run-1 lesson — uniform
-# sampling never produces the all-zero command).
+# 6D 指令槽位 [x, y, z, roll, pitch, yaw] 用于与 velocity/velstand 的 obs
+# 一致, 但仅 z/roll/pitch 被跟踪 (下方 axis_weights) — 与原 standup 身体控制
+# 和 runtime 接口相同的 3 轴. x/y/yaw 永远保持微小 "alive" 范围: policy 学会
+# 忽略它们 (它们是奖励不相关噪声) 而非留下死权重.
+# z 范围非对称: STAND_Z 是 HOME 处的自然平衡, 所以其下方有大量蹲姿, 但其上方
+# 仅 ~1 cm 腿伸展. 角度上限 ±15°: velocity 身体控制 run 1 显示 ±20° 训练出
+# 抽搐/过驱倾斜.
+BODY_CMD_MAX_Z_DOWN = 0.04  # m, STAND_Z 下方蹲
+BODY_CMD_MAX_Z_UP = 0.030  # m, STAND_Z 上方伸展
+BODY_CMD_MAX_ANGLE = math.radians(15)  # rad, 躯干 pitch/roll
+BODY_CMD_ALIVE_XY = 0.005  # m, 永久 x/y 噪声范围
+BODY_CMD_ALIVE_ANGLE = 0.05  # rad, stage-0 / 永久 yaw 范围
+# 重采样时的精确零指令概率: 保持部署空闲状态 ("名义站立, 无指令") 被训练
+# (velocity run-1 教训 — 均匀采样从不产生全零指令).
 BODY_CMD_ZERO_PROB = 0.3
 
 from mjlab.envs import ManagerBasedRlEnvCfg
@@ -150,7 +142,7 @@ def make_microduck_standup_env_cfg(
     play: bool = False,
     rough: bool = False,
 ) -> ManagerBasedRlEnvCfg:
-    """Create Microduck stand environment configuration (sit-keyframe start)."""
+    """创建 Microduck 站立环境配置 (坐姿关键帧起点)."""
     feet_ground_cfg = ContactSensorCfg(
         name="feet_ground_contact",
         primary=ContactMatch(
@@ -176,7 +168,7 @@ def make_microduck_standup_env_cfg(
 
     foot_frictions_geom_names = ("left_foot_collision", "right_foot_collision")
 
-    # ── Base config ───────────────────────────────────────────────────────────
+    # ── 基础配置 ───────────────────────────────────────────────────────────
     cfg = make_velocity_env_cfg()
 
     cfg.scene.entities = {"robot": MICRODUCK_STANDUP_ROBOT_CFG}
@@ -185,12 +177,12 @@ def make_microduck_standup_env_cfg(
 
     cfg.episode_length_s = EPISODE_LENGTH_S
 
-    # ── Actions ───────────────────────────────────────────────────────────────
+    # ── 动作 ───────────────────────────────────────────────────────────────
     joint_pos_action = cfg.actions["joint_pos"]
     assert isinstance(joint_pos_action, JointPositionActionCfg)
     joint_pos_action.scale = 1.0
 
-    # ── Rewards: drop walking-specific terms ──────────────────────────────────
+    # ── 奖励: 丢弃行走专用项 ──────────────────────────────────────────────────
     for name in [
         "track_linear_velocity",
         "track_angular_velocity",
@@ -203,63 +195,56 @@ def make_microduck_standup_env_cfg(
         if name in cfg.rewards:
             del cfg.rewards[name]
 
-    # ── Rewards: minimum-viable set for an organic standup policy ────────────
-    # Single fixed target (STAND = HOME pose + STAND_Z), active from t=0. No
-    # trajectory, no waypoints, no episode-progress gating. The policy is free
-    # to discover any rise path that satisfies:
-    #   (1) end-state matches the HOME pose + STAND_Z
-    #   (2) rise is gentle (low |a_z| throughout)
-    #   (3) trunk stays upright throughout (failure mode: tip backward while
-    #       extending legs; no "low z is safe" regime as in sit)
-    #   (4) joint/action motion stays smooth (sim2real regularisers)
+    # ── 奖励: 有机 standup policy 的最小可行集 ────────────
+    # 单一固定目标 (STAND = HOME 姿态 + STAND_Z), 从 t=0 起活跃. 无轨迹, 无
+    # waypoints, 无 episode 进度门控. policy 自由发现任何满足以下条件的上升
+    # 路径:
+    #   (1) 终态匹配 HOME 姿态 + STAND_Z
+    #   (2) 上升平缓 (全程低 |a_z|)
+    #   (3) 躯干全程保持直立 (失败模式: 伸腿时后倾; 不像 sit 有 "低 z 安全"
+    #       区)
+    #   (4) 关节/动作运动保持平滑 (sim2real 正则项)
     #
-    # 2026-07 TRANSFER FIX (violent/shaky on the real robot): ALL task weights
-    # below divided by 4 (8→2, 30→7.5, 15→3.75, …) so the total task mass
-    # (~12) matches velocity's (~11) and the shared sim2real regularisers act
-    # at the same RELATIVE strength as in the well-transferring velocity env.
-    # Previously the task mass was ~49, so nominally-identical regulariser
-    # weights were effectively ~4× weaker here → jitter/limit-cycle around the
-    # standing point was nearly free. Internal ratios between task terms are
-    # unchanged (uniform scaling), so the per-term rationale comments below
-    # still hold — just read their absolute reward numbers ×4. PPO normalises
-    # advantages, so the global scale itself doesn't matter; only the
-    # task↔regulariser ratio does.
+    # 2026-07 转移修复 (真机上暴力/抖动): 下方所有任务权重除以 4 (8→2,
+    # 30→7.5, 15→3.75, …), 使总任务质量 (~12) 匹配 velocity 的 (~11), 共享的
+    # sim2real 正则项以与转移良好的 velocity 环境中相同的相对强度作用. 此前
+    # 任务质量 ~49, 所以名义相同的正则权重在此处实际 ~4× 更弱 → 站立点附近
+    # 的抖动/极限环几乎免费. 任务项之间的内部比例不变 (均匀缩放), 所以下方
+    # 每项的理由注释仍成立 — 只是绝对奖励数值读 ×4. PPO 归一化优势, 所以全局
+    # 尺度本身不重要; 只有任务↔正则比例重要.
 
-    # Pose target — legs+hips+knees+ankles. target_overrides=None → HOME.
+    # 姿态目标 — 腿+髋+膝+踝. target_overrides=None → HOME.
     cfg.rewards["pose_stand_legs"] = RewardTermCfg(
         func=microduck_mdp.pose_target_match,
         weight=2.0,
         params={
             "std": 0.5,
             "joint_indices": _LEG_JOINTS,
-            "target_overrides": None,  # HOME = standing
+            "target_overrides": None,  # HOME = 站立
         },
     )
 
-    # Head pose tracking (commandable head control, like the velocity env).
-    # Replaces the old pose_stand_neck reward (which pinned the neck/head to HOME)
-    # — the neck/head are now steered by the head_pose command instead. Removed
-    # from pose_stand_l1 / standing_composite below for the same reason, so no
-    # reward fights head_pose_tracking's gradient.
+    # 头部姿态跟踪 (可指令头部控制, 同 velocity 环境). 替换旧的
+    # pose_stand_neck 奖励 (将颈/头钉在 HOME) — 颈/头现在由 head_pose 指令
+    # 驱动. 出于同样原因从下方 pose_stand_l1 / standing_composite 中移除, 使
+    # 没有奖励与 head_pose_tracking 的梯度对抗.
     cfg.rewards["head_pose_tracking"] = RewardTermCfg(
         func=microduck_mdp.head_pose_tracking,
         weight=0.75,
         params={"command_name": "head_pose", "std": 0.5},
     )
 
-    # Head DC-droop penalty (velocity's fix, standup-adapted). L1 on a 1 s EMA
-    # of the head tracking error — prices only the sustained gravity sag the
-    # policy can cancel by biasing the neck command up; transient motion
-    # averages out. TWO standup-specific safeties, both mandatory here:
-    #  - UPRIGHT GATE (same values as arrival_damping): the gate multiplies the
-    #    error feeding the EMA, so the ground/rising phase accumulates NOTHING
-    #    — no reward wall at the finish line, no tax on the head-pivot flip
-    #    (the retired head_impact_penalty froze the policy exactly that way).
-    #  - STARTS AT 0, introduced at iter 3000 by the curriculum below — same
-    #    discovery-vs-refinement timing as arrival_damping/torque_rate.
+    # 头部 DC 下垂惩罚 (velocity 的修复, standup 适配). 头部跟踪误差的 1 s EMA
+    # 上的 L1 — 仅对 policy 可通过向上偏置颈部指令抵消的持续重力下垂收费;
+    # 瞬态运动平均掉. 两个 standup 专用安全措施, 两者此处都是强制:
+    #  - 直立门控 (同 arrival_damping 值): 门控乘以喂入 EMA 的误差, 所以地面/
+    #    上升阶段累积为零 — 终点线无奖励墙, 头部枢轴翻转无税 (退役的
+    #    head_impact_penalty 正是以此方式冻结 policy).
+    #  - 从 0 开始, 由下方课程在 iter 3000 引入 — 同 arrival_damping/torque_rate
+    #    的发现 vs 精炼时序.
     cfg.rewards["head_pose_bias"] = RewardTermCfg(
         func=microduck_mdp.head_pose_bias_penalty,
-        weight=0.0,  # ramped by head_pose_bias_weight curriculum
+        weight=0.0,  # 由 head_pose_bias_weight 课程渐升
         params={
             "command_name": "head_pose",
             "tau_s": 1.0,
@@ -270,29 +255,25 @@ def make_microduck_standup_env_cfg(
         },
     )
 
-    # L1 bootstrap — constant gradient even when far from HOME.
-    # Bumped 2 → 5: at convergence the policy parks ~0.18 rad off-HOME (mostly
-    # bent knees) costing only -0.35/step at weight 2 — cheap enough to ignore.
-    # At weight 5 that error costs -0.9/step, forcing the policy to actually
-    # close the gap on the remaining joints.
+    # L1 bootstrap — 即使远离 HOME 也有恒定梯度.
+    # 从 2 提到 5: 收敛时 policy 停在 ~0.18 rad 偏离 HOME (主要是弯曲膝盖),
+    # 在权重 2 时仅代价 -0.35/step — 足够便宜可忽略. 在权重 5 该误差代价
+    # -0.9/step, 迫使 policy 实际关闭剩余关节的差距.
     cfg.rewards["pose_stand_l1"] = RewardTermCfg(
         func=microduck_mdp.pose_l1_penalty,
         weight=1.25,
         params={
-            # Legs only — neck/head are steered by head_pose_tracking.
+            # 仅腿 — 颈/头由 head_pose_tracking 驱动.
             "joint_indices": _LEG_JOINTS,
             "target_overrides": None,
         },
     )
 
-    # Trunk height target — two-layer Gaussian to get both bootstrap reach
-    # AND a sharp peak at STAND_Z.
-    #  - ``height_stand``: wide std (0.04), for the bootstrap pull from sit.
-    #  - ``height_stand_sharp``: narrow std (0.015), creates a strong gradient
-    #    in the final cm. Earlier runs converged at z ≈ 0.109 because the
-    #    wide-std Gaussian was already saturated (0.93/1.0) — no gradient to
-    #    pull the last cm. The sharp layer adds 0.36→1.0 reward jump in that
-    #    same range, ~3× the marginal pull.
+    # 躯干高度目标 — 双层高斯, 同时获得 bootstrap 距离 AND STAND_Z 处的尖峰.
+    #  - ``height_stand``: 宽 std (0.04), 用于从 sit 的 bootstrap 拉.
+    #  - ``height_stand_sharp``: 窄 std (0.015), 在最后 cm 处创建强梯度.
+    #    早期 run 在 z ≈ 0.109 收敛, 因为宽 std 高斯已饱和 (0.93/1.0) — 无梯度
+    #    拉最后 cm. 尖峰层在该范围添加 0.36→1.0 奖励跳跃, ~3× 边际拉力.
     cfg.rewards["height_stand"] = RewardTermCfg(
         func=microduck_mdp.height_target_gaussian,
         weight=1.0,
@@ -311,10 +292,9 @@ def make_microduck_standup_env_cfg(
             "asset_cfg": SceneEntityCfg("robot", body_names=("trunk_base",)),
         },
     )
-    # L1 bumped 10 → 30: previous run plateaued sitting still because the
-    # static-sit basin (-0.5 reward from L1 + everything else positive) was
-    # net positive. At weight 30, sitting still costs -1.5/step — net cost
-    # of "stay sitting" forces exploration.
+    # L1 从 10 提到 30: 先前 run 因坐姿静止而平台化, 因为静止坐姿盆 (-0.5 L1
+    # 奖励 + 其他全正) 净正. 权重 30 时坐姿静止代价 -1.5/step — "保持坐姿"
+    # 的净代价迫使探索.
     cfg.rewards["height_stand_l1"] = RewardTermCfg(
         func=microduck_mdp.height_l1_penalty,
         weight=7.5,
@@ -324,24 +304,18 @@ def make_microduck_standup_env_cfg(
         },
     )
 
-    # Reward upward CoM velocity below STAND_Z — pays for the *motion* of
-    # rising, not just for the destination. Critical bootstrap: with only
-    # destination rewards, "stay sitting upright collecting most-of-pose +
-    # upright" was the dominant local optimum. Rewarding vz > 0 directly
-    # makes any rise attempt immediately positive. Gates off above
-    # max_height so the policy can't farm it by bobbing.
-    # max_height set just above STAND_Z (0.12 → 0.125) so the reward stays
-    # active through the final cm of rise. Earlier 0.11 caused the policy to
-    # park at ~0.108 (gate-off altitude) and never finish the climb.
-    # NO max_vz cap (reverted 2026-07-24, second broken run): capping the
-    # rewarded rise speed — even at a generous 0.30 — shrinks the payoff of
-    # noisy recovery ATTEMPTS during the discovery phase, and face-up/face-down
-    # recovery never got learned. Both broken runs shared the same wandb
-    # signature regardless of cap value (0.15 or 0.30) and gate tuning:
-    # standing metrics drop at the ground_state_mix stages (1500/2500) instead
-    # of recovering like the reference run. Smoothing is now done by the
-    # LATE-phased penalty curricula below instead (see arrival_damping /
-    # smoothness_polish comments).
+    # 奖励 STAND_Z 下方向上 CoM 速度 — 为上升的 *运动* 付费, 而非仅目的地.
+    # 关键 bootstrap: 仅目的地奖励下, "保持坐姿直立收集大部分姿态 + 直立"
+    # 是主导局部最优. 直接奖励 vz > 0 使任何上升尝试立即变正. 在 max_height
+    # 以上关闭门控, 使 policy 不能通过上下弹跳刷. max_height 设在略高于
+    # STAND_Z (0.12 → 0.125), 使奖励在最后 cm 上升中仍活跃. 早期 0.11 使
+    # policy 停在 ~0.108 (门控关闭高度) 且从不完成爬升.
+    # 无 max_vz 上限 (2026-07-24 回退, 第二次失败 run): 上限化奖励上升速度 —
+    # 即使在慷慨的 0.30 — 缩小发现阶段嘈杂恢复 *尝试* 的回报, 面/面下恢复
+    # 从未学到. 两次失败 run 共享相同 wandb 签名, 无论上限值 (0.15 或 0.30)
+    # 和门控调整: 站立指标在 ground_state_mix 阶段 (1500/2500) 下降, 而非像
+    # 参考 run 那样恢复. 现在由下方后期阶段的惩罚课程替代完成平滑 (见
+    # arrival_damping / smoothness_polish 注释).
     cfg.rewards["com_upward_velocity"] = RewardTermCfg(
         func=microduck_mdp.com_upward_velocity,
         weight=0.75,
@@ -351,39 +325,32 @@ def make_microduck_standup_env_cfg(
         },
     )
 
-    # Gentle rise — penalty on |a_z|. Compatible with com_upward_velocity:
-    # constant positive vz collects upward-velocity reward AND has a_z = 0,
-    # so the two pressures together select for smooth constant-velocity rise.
-    # NOTE this term is GLOBAL (not phase-gated): prone flips pay it in full
-    # (impacts + push-off are |a_z| spikes). The 2026-07-24 attempt to double
-    # it to -0.01 contributed to the face-up freeze; -0.005 is the ceiling
-    # unless it gets a height/tilt gate like arrival_damping.
-    # ⚠️ POSITIVE weight: trunk_vertical_accel_penalty ALREADY returns -|a_z|.
-    # The previous -0.005 double-negated into a (small) reward for vertical
-    # shocks — the same sign bug roller_standup found and fixed in its
-    # gentle_rise, confirmed again on the sitstand run 7ev90yd9 (its
-    # Episode_Reward/gentle_motion logged POSITIVE). Keep magnitude small:
-    # |a_z| is unavoidable during prone flips, a big weight is a motion-blocker.
+    # 平缓上升 — |a_z| 惩罚. 与 com_upward_velocity 兼容: 恒定正 vz 收集
+    # 向上速度奖励且有 a_z = 0, 所以两压力共同选择平滑恒速上升.
+    # 注意此项是 GLOBAL (非相位门控): 俯卧翻转全额付费 (冲击 + 推离是 |a_z|
+    # 尖峰). 2026-07-24 将其翻倍到 -0.01 促成面朝上冻结; -0.005 是上限, 除非
+    # 它获得像 arrival_damping 那样的高度/倾斜门控.
+    # ⚠️ 正权重: trunk_vertical_accel_penalty 已返回 -|a_z|. 先前 -0.005 双
+    # 重否定为垂直冲击的 (小) 奖励 — roller_standup 在其 gentle_rise 中发现
+    # 并修复的相同符号 bug, 在 sitstand run 7ev90yd9 上再次确认 (其
+    # Episode_Reward/gentle_motion 记录为正). 保持小量: |a_z| 在俯卧翻转中
+    # 不可避免, 大权重是运动阻断剂.
     cfg.rewards["gentle_rise"] = RewardTermCfg(
         func=microduck_mdp.trunk_vertical_accel_penalty,
         weight=0.005,
         params={"asset_cfg": SceneEntityCfg("robot", body_names=("trunk_base",))},
     )
 
-    # Arrival damper — trunk ω_xy², gated on height AND tilt (zero above 45°
-    # tilt / below 0.09 m, full below 20° tilt / above 0.11 m). Targets the
-    # real-robot failure loop: rise → overshoot vertical → tip → retry.
+    # 到达阻尼器 — 躯干 ω_xy², 门控在高度 AND 倾斜 (45° 倾斜以上 / 0.09 m
+    # 以下为零, 20° 倾斜以下 / 0.11 m 以上满). 针对真机失败循环: 上升 →
+    # 过冲垂直 → 倾倒 → 重试.
     #
-    # STARTS AT WEIGHT 0 — introduced at iter 3000 by the arrival_damping
-    # curriculum below. Two broken runs (2026-07-24) proved that ANY
-    # attempt-tax active during the recovery DISCOVERY phase (ground_state_mix
-    # ramps face-down/face-up until iter 2500) prevents the flip from being
-    # found at all: exploration of the hard poses is noisy thrash, taxing it
-    # makes attempts net-negative, "do nothing" wins. Gate refinement (tilt
-    # gating, halved weight, generous vz cap) did NOT change the failure
-    # signature — the fix is timing, not magnitude. From iter 3000 the skills
-    # already exist and keep being exercised by prone resets, so the damping
-    # fine-tunes their execution instead of blocking their discovery.
+    # 从权重 0 开始 — 由下方 arrival_damping 课程在 iter 3000 引入. 两次失败
+    # run (2026-07-24) 证明任何在恢复发现阶段 (ground_state_mix 渐升面朝下/
+    # 面朝上直到 iter 2500) 活跃的尝试税阻止翻转被发现: 困难姿态的探索是嘈杂
+    # 抽打, 对其收费使尝试净负, "什么都不做"赢. 门控精炼 (倾斜门控, 减半权重,
+    # 慷慨 vz 上限) 不改变失败签名 — 修复是时序, 而非量级. 从 iter 3000 起技能
+    # 已存在并持续被俯卧 reset 练习, 所以阻尼精调其执行而非阻止其发现.
     cfg.rewards["arrival_damping"] = RewardTermCfg(
         func=microduck_mdp.body_ang_vel_at_height,
         weight=0.0,
@@ -396,26 +363,21 @@ def make_microduck_standup_env_cfg(
         },
     )
 
-    # Upright — two-layer like the height reward.
-    #  - ``upright_linear``: cos(tilt). Strong gradient at high tilt (e.g.,
-    #    while inverted at the start of a recovery), weak near vertical.
-    #    Provides bootstrap pull from any orientation.
-    #  - ``upright_sharp``: exp(-tilt²/std²) with std ≈ 6°. Gradient is
-    #    STRONGEST in the near-vertical regime where the linear version
-    #    runs out of steam. Previous run converged at ~37° back-lean because
-    #    the linear pull at small tilt becomes weak; this term punishes that
-    #    exact regime.
+    # 直立 — 双层, 同高度奖励.
+    #  - ``upright_linear``: cos(tilt). 高倾斜处强梯度 (如恢复开始时倒置),
+    #    接近垂直时弱. 提供从任何朝向的 bootstrap 拉.
+    #  - ``upright_sharp``: exp(-tilt²/std²), std ≈ 6°. 线性版本用尽气力的近
+    #    垂直区域梯度最强. 先前 run 在 ~37° 后倾收敛, 因为小倾斜处线性拉力变
+    #    弱; 此项惩罚该精确区域.
     cfg.rewards["upright_linear"] = RewardTermCfg(
         func=microduck_mdp.body_upright_linear,
         weight=1.5,
         params={"asset_cfg": SceneEntityCfg("robot", body_names=("trunk_base",))},
     )
-    # Sharp Gaussian upright, gated by trunk z. Pays only when the robot is
-    # actually at the standing height — prevents the "crouch low and vertical"
-    # exploit. Broadened std 0.1 → 0.3 (≈17°): too sharp before, scored
-    # near-zero at the lean basin (no gradient). With 0.3, the lean basin
-    # at z=0.111 (smoothstep ~0.91) and tilt 37° (gaussian ~0.11) scores
-    # ~0.1 = visible gradient that pulls toward vertical.
+    # 尖峰高斯直立, 由躯干 z 门控. 仅当机器人实际在站立高度时支付 — 阻止
+    # "蹲低并垂直"利用. std 从 0.1 加宽到 0.3 (≈17°): 此前太尖, 在倾斜盆中
+    # 接近零分 (无梯度). 用 0.3, z=0.111 处倾斜盆 (smoothstep ~0.91) 和倾斜
+    # 37° (高斯 ~0.11) 得分 ~0.1 = 拉向垂直的可见梯度.
     cfg.rewards["upright_sharp"] = RewardTermCfg(
         func=microduck_mdp.upright_gaussian_at_height,
         weight=1.5,
@@ -427,35 +389,32 @@ def make_microduck_standup_env_cfg(
         },
     )
 
-    # Smooth multiplicative goal-state score (broad stds).
-    # The previous tight stds (height=0.015, upright=0.15, pose=0.20) had
-    # the composite at ~5e-5 at the lean basin — invisible to the policy,
-    # zero gradient. Broadening so the lean basin scores ~0.2 (visible
-    # gradient) while the goal still scores ~1.0 (clear attractor).
+    # 平滑乘性目标状态评分 (宽 std).
+    # 先前紧 std (height=0.015, upright=0.15, pose=0.20) 使组合在倾斜盆 ~5e-5
+    # — 对 policy 不可见, 零梯度. 加宽使倾斜盆得分 ~0.2 (可见梯度) 而目标仍
+    # 得分 ~1.0 (清晰吸引子).
     cfg.rewards["standing_composite"] = RewardTermCfg(
         func=microduck_mdp.standing_composite_score,
         weight=3.75,
         params={
             "target_height": STAND_Z,
-            "height_std": 0.04,  # 4cm — broad, covers the climb
-            "upright_std": 0.40,  # ≈ 23° — lean basin scores ~0.3
-            "pose_std": 0.40,  # joint-RMS, broad enough for partial pose
-            "joint_indices": _LEG_JOINTS,  # neck/head steered by head_pose_tracking
+            "height_std": 0.04,  # 4cm — 宽, 覆盖爬升
+            "upright_std": 0.40,  # ≈ 23° — 倾斜盆得分 ~0.3
+            "pose_std": 0.40,  # joint-RMS, 足够宽以覆盖部分姿态
+            "joint_indices": _LEG_JOINTS,  # 颈/头由 head_pose_tracking 驱动
             "target_overrides": None,
             "asset_cfg": SceneEntityCfg("robot", body_names=("trunk_base",)),
         },
     )
 
-    # Body pose tracking — z/roll/pitch only (axis_weights), the runtime
-    # body-control axes. Locomotion variant (not body_pose_tracking_6d) so the
-    # unused x/y axes wouldn't reference the spawn origin, which the robot
-    # leaves during prone flips. Weight starts at 0; body_pose_tracking_weight
-    # ramps it in from iter 2500 (after ground_state_mix finishes) so recovery
-    # discovery is untouched. While prone/rising the reward is ≈0 on all
-    # tracked axes, so before the robot stands it is just another standing
-    # attractor — unlike motion penalties, it can't tax flip/rise attempts.
-    # Tight stds on purpose (standup phase-2 lesson): at 1 cm z error with
-    # z_std=0.01 the axis reward drops to 0.37 (real gradient); 0.02 → 0.78.
+    # 身体姿态跟踪 — 仅 z/roll/pitch (axis_weights), runtime 身体控制轴.
+    # Locomotion 变体 (非 body_pose_tracking_6d), 使未用 x/y 轴不引用生成原点
+    # (机器人在俯卧翻转中离开该点). 权重从 0 开始; body_pose_tracking_weight
+    # 从 iter 2500 (ground_state_mix 完成后) 渐入, 使恢复发现不受干扰. 俯卧/
+    # 上升时奖励在所有跟踪轴上 ≈0, 所以机器人站起前它只是另一个站立吸引子 —
+    # 与运动惩罚不同, 它不能对翻转/上升尝试征税.
+    # 有意紧 std (standup 阶段 2 教训): 1 cm z 误差在 z_std=0.01 时轴奖励降到
+    # 0.37 (真实梯度); 0.02 → 0.78.
     if ENABLE_BODY_CONTROL:
         cfg.rewards["body_pose_tracking"] = RewardTermCfg(
             func=microduck_mdp.body_pose_tracking_locomotion,
@@ -470,38 +429,34 @@ def make_microduck_standup_env_cfg(
             },
         )
 
-    # ── Sim2real regularisers — MATCHED to velocity (2026-07) ───────────────
-    # velocity's exact set and absolute weights:
-    #   • action_rate_l2: -0.1 at stage 0, ramped -0.1 → -1.0 by iter 1500
-    #     (action_rate_weight curriculum below, velocity's exact stages)
+    # ── Sim2real 正则项 — 与 velocity 匹配 (2026-07) ───────────────
+    # velocity 的精确集和绝对权重:
+    #   • action_rate_l2: stage 0 处 -0.1, 由 iter 1500 渐升 -0.1 → -1.0
+    #     (下方 action_rate_weight 课程, velocity 的精确阶段)
     #   • body_ang_vel -0.05, angular_momentum -0.02
-    #   • microduck-only extras DROPPED, like velocity drops them:
+    #   • microduck 专用额外项丢弃, 同 velocity:
     #     neck_action_rate_l2, joint_torques_l2, joint_torque_rate_l2, soft_landing
-    # Parity is made REAL by the ÷4 task-stack scaling above — previously the
-    # same absolute weights were ~4× weaker relative to the ~49 task mass.
+    # 一致性由上方 ÷4 任务栈缩放变为真实 — 此前相同绝对权重相对于 ~49 任务
+    # 质量实际 ~4× 更弱.
     #
-    # HISTORY / RISK: at the OLD task scale, raising body_ang_vel to -0.15 and
-    # the action_rate end to -1.2 killed back-recovery (both are motion-blockers
-    # for the flip). At the new ÷4 scale, body_ang_vel -0.05 ≈ -0.2 old-units —
-    # WATCH face-down/face-up recovery as ground_state_mix ramps them in
-    # (iters 600–2500). If recovery freezes: halve body_ang_vel to -0.025
-    # first, then soften the action_rate curriculum end to -0.6.
+    # 历史/风险: 在旧任务尺度下, 将 body_ang_vel 提到 -0.15 和 action_rate
+    # 终点到 -1.2 杀死背部恢复 (两者都是翻转的运动阻断剂). 在新 ÷4 尺度下,
+    # body_ang_vel -0.05 ≈ -0.2 旧单位 — 关注 ground_state_mix 渐入 (iters
+    # 600–2500) 时的面朝下/面朝上恢复. 若恢复冻结: 先将 body_ang_vel 减半到
+    # -0.025, 再软化 action_rate 课程终点到 -0.6.
     #
-    # 2026-07 smoothness polish (rise violent + overshoot-retry loop on the
-    # real robot after the ÷4 rescale): joint_torque_rate_l2 (anti-jitter:
-    # penalizes torque CHANGE, not magnitude/rotation) + arrival_damping
-    # (rewards block above). BOTH start at weight 0 and are introduced at iter
-    # 3000 by the smoothness-polish curricula below — the reward set is
-    # IDENTICAL to the working 2026-07-23 run until then. See the
-    # arrival_damping comment for why timing (discovery vs fine-tuning), not
-    # magnitude, is what decides whether these terms break recovery.
+    # 2026-07 平滑度精修 (÷4 重缩放后真机上上升暴力 + 过冲重试循环):
+    # joint_torque_rate_l2 (抗抖动: 惩罚力矩变化, 非幅度/旋转) + arrival_damping
+    # (上方奖励块). 两者都从权重 0 开始, 由下方平滑度精修课程在 iter 3000 引入
+    # — 奖励集到那时与工作中的 2026-07-23 run 相同. 见 arrival_damping 注释,
+    # 为何时序 (发现 vs 精调), 而非量级, 决定这些项是否破坏恢复.
     cfg.rewards["action_rate_l2"] = RewardTermCfg(func=mdp.action_rate_l2, weight=-0.1)
     cfg.rewards["joint_torque_rate_l2"] = RewardTermCfg(func=microduck_mdp.joint_torque_rate_l2, weight=0.0)
 
     cfg.rewards["body_ang_vel"].params["asset_cfg"].body_names = ("trunk_base",)
-    cfg.rewards["body_ang_vel"].weight = -0.05  # motion-blocker: kept LIGHT (velocity value)
-    cfg.rewards["angular_momentum"].weight = -0.02  # velocity value
-    cfg.rewards.pop("soft_landing", None)  # velocity removes it
+    cfg.rewards["body_ang_vel"].weight = -0.05  # 运动阻断剂: 保持轻 (velocity 值)
+    cfg.rewards["angular_momentum"].weight = -0.02  # velocity 值
+    cfg.rewards.pop("soft_landing", None)  # velocity 移除它
 
     cfg.rewards["self_collisions"] = RewardTermCfg(
         func=mdp.self_collision_cost,
@@ -509,31 +464,30 @@ def make_microduck_standup_env_cfg(
         params={"sensor_name": self_collision_cfg.name},
     )
 
-    # Drop only the base "upright" Gaussian — standup uses its own
-    # upright_linear/upright_sharp instead. (angular_momentum kept above to match
-    # velocity; soft_landing/hip_yaw_roll_deviation dropped to match velocity.)
+    # 仅丢弃基础 "upright" 高斯 — standup 使用自己的 upright_linear/
+    # upright_sharp 替代. (angular_momentum 保留上方以匹配 velocity;
+    # soft_landing/hip_yaw_roll_deviation 丢弃以匹配 velocity.)
     if "upright" in cfg.rewards:
         del cfg.rewards["upright"]
 
-    # ── Observations (identical layout to walking / sit policies) ─────────────
+    # ── 观测 (与行走 / sit policies 布局相同) ─────────────
     del cfg.observations["actor"].terms["base_lin_vel"]
 
     cfg.observations["critic"].terms["base_lin_vel"] = ObservationTermCfg(
         func=mdp.base_lin_vel,
         scale=1.0,
     )
-    # mjlab 1.3.0 base template adds sensor-based foot_height + height_scan obs.
-    # Standup has no terrain-height sensor (and drops the walking foot rewards),
-    # so remove these terms. foot_air_time/foot_contact(_forces) use the
-    # feet_ground_contact sensor, which standup does define, so they stay.
+    # mjlab 1.3.0 基础模板添加基于传感器的 foot_height + height_scan obs.
+    # Standup 无地形高度传感器 (并丢弃行走足部奖励), 所以移除这些项.
+    # foot_air_time/foot_contact(_forces) 使用 feet_ground_contact 传感器,
+    # standup 确实定义了它, 所以它们保留.
     del cfg.observations["critic"].terms["foot_height"]
     del cfg.observations["actor"].terms["height_scan"]
     del cfg.observations["critic"].terms["height_scan"]
-    # The retained sensor-derived critic terms get the NaN-safe wrappers: a
-    # non-finite contact force slips past robot_state_is_nan (it checks joint +
-    # root state only) and a single NaN here kills the run via rsl_rl's
-    # check_nan — the 2026-08-21 Velocity2-Rough-Backlash crash. Standup lands
-    # and flips constantly, so degenerate contacts are MORE likely here.
+    # 保留的传感器派生 critic 项获得 NaN 安全包装: 非有限接触力绕过
+    # robot_state_is_nan (它仅检查关节 + 根状态), 单个 NaN 通过 rsl_rl 的
+    # check_nan 杀死 run — 2026-08-21 Velocity2-Rough-Backlash 崩溃. Standup
+    # 持续着陆和翻转, 所以退化接触在此更可能.
     for _term, _safe in (
         ("foot_contact_forces", microduck_mdp.foot_contact_forces_safe),
         ("foot_air_time", microduck_mdp.foot_air_time_safe),
@@ -545,8 +499,8 @@ def make_microduck_standup_env_cfg(
     cfg.observations["actor"].terms[gravity_term_name] = deepcopy(cfg.observations["actor"].terms[gravity_term_name])
     cfg.observations["actor"].terms["base_ang_vel"] = deepcopy(cfg.observations["actor"].terms["base_ang_vel"])
 
-    # IMU obs delay: max_lag 1 (was 3 = 60 ms worst case) — match velocity's
-    # 2026-07 audit value; the real dxl IMU path is fast (±20 ms envelope).
+    # IMU obs 延迟: max_lag 1 (原为 3 = 60 ms 最坏情况) — 匹配 velocity 的
+    # 2026-07 审计值; 真实 dxl IMU 路径快 (±20 ms 包络).
     cfg.observations["actor"].terms["base_ang_vel"].delay_min_lag = 0
     cfg.observations["actor"].terms["base_ang_vel"].delay_max_lag = 1
     cfg.observations["actor"].terms["base_ang_vel"].delay_update_period = 64
@@ -554,14 +508,14 @@ def make_microduck_standup_env_cfg(
     cfg.observations["actor"].terms[gravity_term_name].delay_max_lag = 1
     cfg.observations["actor"].terms[gravity_term_name].delay_update_period = 64
 
-    # Obs noise matched to the velocity env.
+    # obs 噪声匹配 velocity 环境.
     cfg.observations["actor"].terms["base_ang_vel"].noise = Unoise(n_min=-0.03, n_max=0.03)
     cfg.observations["actor"].terms[gravity_term_name].noise = Unoise(n_min=-0.01, n_max=0.01)
     cfg.observations["actor"].terms["joint_pos"].noise = Unoise(n_min=-0.001, n_max=0.001)
     cfg.observations["actor"].terms["joint_vel"].noise = Unoise(n_min=-0.25, n_max=0.25)
 
-    # IMU mounting-misalignment DR (match velocity): per-env constant rotation of
-    # the IMU-derived actor obs; critic keeps the true values.
+    # IMU 安装错位 DR (匹配 velocity): IMU 派生 actor obs 的每环境恒定旋转;
+    # critic 保留真值.
     if ENABLE_IMU_ORIENTATION_RANDOMIZATION:
         av = cfg.observations["actor"].terms["base_ang_vel"]
         av.func = microduck_mdp.base_ang_vel_imu_misaligned
@@ -575,16 +529,16 @@ def make_microduck_standup_env_cfg(
     cfg.observations["actor"].terms["joint_vel"].delay_max_lag = 1
     cfg.observations["actor"].terms["joint_vel"].delay_update_period = 0
 
-    # Deepcopy joint_pos/joint_vel per group (they share base-template objects) so
-    # the encoder-bias `biased` flag below applies to the actor only.
+    # 按组 deepcopy joint_pos/joint_vel (它们共享基础模板对象), 使下方
+    # encoder-bias `biased` 标志仅应用于 actor.
     passive_excluded = SceneEntityCfg("robot", joint_names=(r"^(?!passive_).*",))
     for grp in ("actor", "critic"):
         for term in ("joint_pos", "joint_vel"):
             cfg.observations[grp].terms[term] = deepcopy(cfg.observations[grp].terms[term])
             cfg.observations[grp].terms[term].params["asset_cfg"] = deepcopy(passive_excluded)
 
-    # Encoder-bias DR (match velocity): actor sees joint_pos + per-env bias; critic
-    # keeps the true joint pos. Requires the base-template encoder_bias event.
+    # 编码器偏置 DR (匹配 velocity): actor 看到 joint_pos + 每环境偏置;
+    # critic 保留真值关节位置. 需要基础模板 encoder_bias 事件.
     if ENABLE_ENCODER_BIAS:
         cfg.events["encoder_bias"].params["bias_range"] = ENCODER_BIAS_RANGE
         cfg.observations["actor"].terms["joint_pos"].params["biased"] = True
@@ -592,10 +546,10 @@ def make_microduck_standup_env_cfg(
     else:
         cfg.events.pop("encoder_bias", None)
 
-    # ── Head pose command (commandable head control, like the velocity env) ───
-    # 4D deltas-from-HOME on neck/head joints: [neck_pitch, head_pitch, head_yaw,
-    # head_roll]. Tracked by head_pose_tracking below; ranges widened by the
-    # head_pose_range curriculum. Same per-joint caps as the velocity env.
+    # ── 头部姿态指令 (可指令头部控制, 同 velocity 环境) ───
+    # 颈/头关节的 4D 相对 HOME 增量: [neck_pitch, head_pitch, head_yaw,
+    # head_roll]. 由下方 head_pose_tracking 跟踪; 范围由 head_pose_range 课程
+    # 加宽. 与 velocity 环境相同的每关节上限.
     cfg.commands["head_pose"] = microduck_mdp.UniformPoseCommandCfg(
         resampling_time_range=HEAD_POSE_CMD_RESAMPLE_S,
         ranges=(
@@ -606,11 +560,11 @@ def make_microduck_standup_env_cfg(
         ),
     )
 
-    # ── Body pose command (6D delta from nominal standing) ───────────────────
-    # [x, y, z, roll, pitch, yaw]. Only z/roll/pitch are tracked (see
-    # body_pose_tracking below); x/y/yaw are permanent alive-range noise.
-    # Ranges start tiny; the body_pose_range curriculum widens z/roll/pitch
-    # once the recovery skills exist (ground_state_mix final at 2500).
+    # ── 身体姿态指令 (相对名义站立的 6D 增量) ───────────────────
+    # [x, y, z, roll, pitch, yaw]. 仅 z/roll/pitch 被跟踪 (见下方
+    # body_pose_tracking); x/y/yaw 是永久 alive 范围噪声. 范围从微小开始;
+    # body_pose_range 课程在恢复技能存在后加宽 z/roll/pitch (ground_state_mix
+    # 在 2500 完成).
     if ENABLE_BODY_CONTROL:
         cfg.commands["body_pose"] = microduck_mdp.UniformPoseCommandCfg(
             resampling_time_range=BODY_POSE_CMD_RESAMPLE_S,
@@ -625,10 +579,9 @@ def make_microduck_standup_env_cfg(
             ),
         )
 
-    # Command obs slots. head_command is the real head_pose command; the
-    # body_command slot carries the real body_pose command when body control is
-    # enabled, and zero padding otherwise (obs shape identical either way).
-    # Layout parity with velocity/velstand: [twist(3), head_pose(4), body_pose(6)].
+    # 指令 obs 槽位. head_command 是真实 head_pose 指令; body_command 槽位
+    # 在启用身体控制时携带真实 body_pose 指令, 否则零填充 (obs 形状两种方式
+    # 相同). 与 velocity/velstand 布局一致: [twist(3), head_pose(4), body_pose(6)].
     for group in ("actor", "critic"):
         cfg.observations[group].terms["head_command"] = ObservationTermCfg(
             func=mdp.generated_commands,
@@ -645,7 +598,7 @@ def make_microduck_standup_env_cfg(
                 params={"dim": 6},
             )
 
-    # ── Command: tiny noise around zero (kept for obs-shape parity) ──────────
+    # ── 指令: 零附近微小噪声 (保留以维持 obs 形状一致) ──────────
     command = cfg.commands["twist"]
     command.rel_standing_envs = 0.0
     command.rel_heading_envs = 0.0
@@ -658,8 +611,8 @@ def make_microduck_standup_env_cfg(
     command.ranges.ang_vel_z = (-0.05, 0.05)
     cfg.commands["twist"] = microduck_mdp.VelocityCommandCommandOnlyCfg(**vars(command))
 
-    # ── Terminations ──────────────────────────────────────────────────────────
-    # Robot starts seated — tilt-based fall termination doesn't apply here.
+    # ── 终止 ──────────────────────────────────────────────────────────────────
+    # 机器人从坐姿开始 — 基于倾斜的摔倒终止不适用此处.
     if "fell_over" in cfg.terminations:
         del cfg.terminations["fell_over"]
     cfg.terminations["nan_state"] = TerminationTermCfg(
@@ -668,9 +621,9 @@ def make_microduck_standup_env_cfg(
         params={"sensor_names": ("feet_ground_contact",)},
     )
 
-    # ── Events ────────────────────────────────────────────────────────────────
-    # BAM (mjlab_frictionloss branch) writes per-env dof_frictionloss/dof_damping
-    # every step; this no-op event registers those fields for per-world expansion.
+    # ── 事件 ────────────────────────────────────────────────────────────────
+    # BAM (mjlab_frictionloss 分支) 每步写入每环境 dof_frictionloss/dof_damping;
+    # 此 no-op 事件注册这些字段以供每世界扩展.
     cfg.events["expand_bam_friction_fields"] = EventTermCfg(
         func=microduck_mdp.expand_bam_friction_fields,
         mode="startup",
@@ -681,47 +634,40 @@ def make_microduck_standup_env_cfg(
         mode="reset",
     )
     cfg.events["foot_friction"].params["asset_cfg"].geom_names = foot_frictions_geom_names
-    cfg.events["foot_friction"].params["ranges"] = (0.7, 1.3)  # match velocity
+    cfg.events["foot_friction"].params["ranges"] = (0.7, 1.3)  # 匹配 velocity
 
-    # Start in the sitting keyframe with noise on joints + trunk tilt. Real
-    # deployment hand-off from the sit policy won't reproduce the SIT
-    # keyframe exactly — the standup policy must be robust to a band of
-    # plausible "sit-ish" starts. Without noise the policy was overfitting
-    # to the exact canonical SIT pose.
+    # 从坐姿关键帧开始, 带关节 + 躯干倾斜噪声. 真实部署从 sit policy 交接
+    # 不会精确重现 SIT 关键帧 — standup policy 必须对一组合理的 "类坐姿"
+    # 起点稳健. 无噪声时 policy 过拟合到精确规范 SIT 姿态.
     cfg.events["set_ground_state"] = EventTermCfg(
         func=microduck_mdp.set_random_ground_state,
         mode="reset",
         params={
-            # Initialize from any pose, 25% each: front (face-down), back
-            # (face-up), sitting keyframe, and already-standing (so the policy
-            # also learns to *hold* a stand, not only to rise).
-            # Initial mix = curriculum stage 0 (easy); the ground_state_mix
-            # curriculum ramps these easy→hard over training. Face-up (back) starts
-            # at 0 and is introduced late (hardest recovery).
-            "face_down_prob": 0.20,  # belly to floor (+90° pitch)
-            "face_up_prob": 0.00,  # back to floor (-90° pitch) — introduced late
-            "sitting_prob": 0.40,  # sit keyframe (deployment hand-off)
-            "standing_prob": 0.40,  # already upright at standing height
-            # Prone reset height: trunk rests at ~0.044 m face-down (measured), so
-            # spawn just above the ground rather than the 0.20–0.25 default (which
-            # would free-fall ~15 cm before landing).
+            # 从任何姿态初始化, 各 25%: 前 (面朝下), 后 (面朝上), 坐姿关键帧,
+            # 和已站立 (使 policy 也学会 *保持* 站立, 不仅上升).
+            # 初始混合 = 课程 stage 0 (易); ground_state_mix 课程在训练中渐升
+            # 这些 易→难. 面朝上 (后) 从 0 开始, 晚期引入 (最难恢复).
+            "face_down_prob": 0.20,  # 腹部贴地 (+90° pitch)
+            "face_up_prob": 0.00,  # 背部贴地 (-90° pitch) — 晚期引入
+            "sitting_prob": 0.40,  # 坐姿关键帧 (部署交接)
+            "standing_prob": 0.40,  # 已在站立高度直立
+            # 俯卧 reset 高度: 躯干面朝下静止在 ~0.044 m (实测), 所以在地面稍
+            # 上方生成而非 0.20–0.25 默认 (会在着陆前自由落体 ~15 cm).
             "prone_z_min": 0.05,
             "prone_z_max": 0.09,
-            # Partial-roll noise on face-up spawns (±90° about the body long
-            # axis): back-recovery was seed-lucky (1 success / 3 failures with
-            # equivalent rewards) because the reward landscape from flat
-            # supine to prone is flat — no gradient until the roll completes.
-            # Near-on-side spawns put starts partway along the roll → built-in
-            # reverse curriculum. See set_random_ground_state in mdp.py.
+            # 面朝上生成的部分滚动噪声 (绕身体长轴 ±90°): 背部恢复是种子运气
+            # (1 成功 / 3 失败, 等价奖励), 因为从平卧到俯卧的奖励景观平坦 —
+            # 滚动完成前无梯度. 近侧边生成将起点放在滚动中途 → 内置反向课程.
+            # 见 mdp.py 中的 set_random_ground_state.
             "face_up_roll_max": math.radians(90),
             "sitting_joint_overrides": SITTING_JOINT_OVERRIDES,
-            "sitting_joint_noise_std": 0.12,  # ≈ 7° per joint
+            "sitting_joint_noise_std": 0.12,  # ≈ 7° 每关节
             "sitting_tilt_max": math.radians(10),  # ±10° pitch/roll
-            # Seated equilibrium is SIT_Z=0.060 — band is −1cm/+3cm around it
-            # (same spread as when equilibrium was 0.07 with 0.06–0.10).
+            # 坐姿平衡是 SIT_Z=0.060 — 围绕它的 −1cm/+3cm 带 (平衡为 0.07 时
+            # 0.06–0.10 的相同分布).
             "sitting_z_min": 0.05,
             "sitting_z_max": 0.09,
-            # Standing init: trunk just above the measured equilibrium (STAND_Z=0.115).
+            # 站立初始化: 躯干略高于实测平衡 (STAND_Z=0.115).
             "standing_z_min": 0.11,
             "standing_z_max": 0.12,
         },
@@ -743,8 +689,8 @@ def make_microduck_standup_env_cfg(
         )
 
     if ENABLE_COM_RANDOMIZATION:
-        # mjlab 1.3.0: stock dr.body_ipos (operation="add") reads the compile-time
-        # default each reset → non-accumulating natively.
+        # mjlab 1.3.0: 原生 dr.body_ipos (operation="add") 每次 reset 读取
+        # 编译时默认 → 原生非累积.
         cfg.events["randomize_com"] = EventTermCfg(
             func=dr.body_ipos,
             mode="reset",
@@ -756,7 +702,7 @@ def make_microduck_standup_env_cfg(
         )
 
     if ENABLE_HEAD_COM_RANDOMIZATION:
-        # Match velocity: randomize the CoM of the head-assembly bodies.
+        # 匹配 velocity: 随机化头部组件体的 CoM.
         cfg.events["randomize_head_com"] = EventTermCfg(
             func=dr.body_ipos,
             mode="reset",
@@ -768,7 +714,7 @@ def make_microduck_standup_env_cfg(
         )
 
     if ENABLE_ARMATURE_RANDOMIZATION:
-        # Match velocity: reflected rotor inertia (non-accumulating, affects BAM).
+        # 匹配 velocity: 反映转子惯量 (非累积, 影响 BAM).
         cfg.events["randomize_armature"] = EventTermCfg(
             func=dr.joint_armature,
             mode="reset",
@@ -794,9 +740,9 @@ def make_microduck_standup_env_cfg(
         )
 
     if ENABLE_MASS_INERTIA_RANDOMIZATION:
-        # match velocity: physics-consistent mass+inertia via pseudo_inertia
-        # (alpha scales both by e^(2α), CoM untouched). Startup mode. The old
-        # custom randomize_mass_and_inertia was a no-op under mjlab 1.3.0.
+        # 匹配 velocity: 通过 pseudo_inertia 的物理一致 mass+inertia
+        # (alpha 通过 e^(2α) 缩放两者, CoM 不变). Startup 模式. 旧的自定义
+        # randomize_mass_and_inertia 在 mjlab 1.3.0 下是 no-op.
         _mi_lo, _mi_hi = MASS_INERTIA_RANDOMIZATION_RANGE
         cfg.events["randomize_mass_inertia"] = EventTermCfg(
             func=dr.pseudo_inertia,
@@ -808,8 +754,8 @@ def make_microduck_standup_env_cfg(
         )
 
     if ENABLE_JOINT_FRICTION_RANDOMIZATION:
-        # match velocity: scale BAM's friction budget per-env via the
-        # FrictionDRBamActuator hook (dof_frictionloss is zeroed under BAM).
+        # 匹配 velocity: 通过 FrictionDRBamActuator hook 每环境缩放 BAM 摩擦
+        # 预算 (dof_frictionloss 在 BAM 下归零).
         cfg.events["randomize_joint_friction"] = EventTermCfg(
             func=microduck_mdp.randomize_bam_friction,
             mode="reset",
@@ -819,11 +765,11 @@ def make_microduck_standup_env_cfg(
             },
         )
 
-    # NOTE: IMU mounting-misalignment is applied at the OBSERVATION level below
-    # (matching velocity) — the old event-based randomize_imu_orientation wrote
-    # site_quat, which under mjlab 1.3.0 is neither per-env nor read by the obs.
+    # 注意: IMU 安装错位在下方 OBSERVATION 级应用 (匹配 velocity) — 旧基于
+    # 事件的 randomize_imu_orientation 写 site_quat, 在 mjlab 1.3.0 下既非每
+    # 环境也不被 obs 读取.
 
-    # ── Terrain ───────────────────────────────────────────────────────────────
+    # ── 地形 ───────────────────────────────────────────────────────────────
     if not rough:
         cfg.scene.terrain.terrain_type = "plane"
         cfg.scene.terrain.terrain_generator = None
@@ -835,19 +781,17 @@ def make_microduck_standup_env_cfg(
             cfg.scene.terrain.terrain_generator.num_cols = 5
             cfg.scene.terrain.terrain_generator.num_rows = 5
 
-    # ── Curriculum ────────────────────────────────────────────────────────────
+    # ── 课程 ────────────────────────────────────────────────────────────
     if not rough:
         del cfg.curriculum["terrain_levels"]
     del cfg.curriculum["command_vel"]
 
-    # Init-pose curriculum: ramp the set_ground_state mix from EASY → HARD instead
-    # of a flat 25/25/25/25 from step 0. With the flat split the policy optimized
-    # the easy majority (hold-stand + sit-rise) and left the hard poses under-
-    # trained — front only partially rose and face-up (back) froze into "do
-    # nothing". This introduces standing/sitting first, then face-down, then
-    # face-up last, and biases toward the hard poses late so they get the most
-    # practice. (event_param_curriculum shallow-merges these keys into the live
-    # set_ground_state event; the z-ranges / joint overrides are left untouched.)
+    # 初始姿态课程: 将 set_ground_state 混合从 易→难 渐升而非从 step 0 起扁平
+    # 25/25/25/25. 扁平划分下 policy 优化易多数 (保持站立 + 坐起) 并使困难姿态
+    # 训练不足 — 前面仅部分起, 面朝上 (后) 冻结成 "什么都不做". 此项先引入
+    # 站立/坐姿, 再面朝下, 最后面朝上, 并在后期偏向困难姿态使其获得最多练习.
+    # (event_param_curriculum 浅合并这些键到活跃 set_ground_state 事件;
+    # z 范围 / 关节覆盖保持不变.)
     cfg.curriculum["ground_state_mix"] = CurriculumTermCfg(
         func=microduck_mdp.event_param_curriculum,
         params={
@@ -894,8 +838,8 @@ def make_microduck_standup_env_cfg(
         },
     )
 
-    # Head pose command range curriculum — same per-joint widening as the velocity
-    # env (5% → 100% of each joint's reachable delta from HOME over ~2000 iters).
+    # 头部姿态指令范围课程 — 与 velocity 环境相同的每关节加宽 (~2000 iters
+    # 内每关节相对 HOME 可达增量的 5% → 100%).
     cfg.curriculum["head_pose_range"] = CurriculumTermCfg(
         func=microduck_mdp.pose_command_range_curriculum,
         params={
@@ -950,16 +894,14 @@ def make_microduck_standup_env_cfg(
         },
     )
 
-    # NOTE: the earlier head_pose_std / head_pose_weight curricula (band-aids for
-    # the head-droop) were removed — the droop was a backward-CoM balance crutch,
-    # fixed at the source by the STAND2 forward-shifted standing pose. head_pose
-    # tracking stays at its baseline (weight 3.0, std 0.5) + head_pose_range.
+    # 注意: 先前的 head_pose_std / head_pose_weight 课程 (头部下垂的创可贴)
+    # 已移除 — 下垂是后向 CoM 平衡拐杖, 由 STAND2 前移站立姿态在源处修复.
+    # head_pose 跟踪保持基线 (权重 3.0, std 0.5) + head_pose_range.
 
-    # CoM-randomization range curricula — match velocity (ramp 0.003 → 0.015 trunk,
-    # 0.003 → 0.01 head over the first ~1500 / ~1000 iters). Trunk capped at
-    # ±15 mm per velocity's 2026-07 audit: beyond that the randomized CoM can
-    # leave the foot support polygon entirely, which trains hyper-reactive
-    # correction. (The old 0.02 final stage here exceeded that cap.)
+    # CoM 随机化范围课程 — 匹配 velocity (前 ~1500 / ~1000 iters 渐升
+    # 0.003 → 0.015 躯干, 0.003 → 0.01 头部). 躯干上限 ±15 mm 按 velocity 的
+    # 2026-07 审计: 超过该值随机化 CoM 可完全离开足部支撑多边形, 训练出
+    # 超反应校正. (此处旧 0.02 最终阶段超过该上限.)
     if ENABLE_COM_RANDOMIZATION:
         cfg.curriculum["com_range"] = CurriculumTermCfg(
             func=microduck_mdp.com_range_curriculum,
@@ -1009,11 +951,11 @@ def make_microduck_standup_env_cfg(
             },
         )
 
-    # action_rate curriculum — velocity's exact ramp (-0.1 → -1.0 by iter 1500).
-    # Gentler early stages than the old -0.4/-0.8/-1.0-by-500 ramp: the rise
-    # skill gets discovered under light smoothing, then damping tightens.
-    # (Old note, still relevant: a -1.2 end once blocked back-recovery; -1.0 is
-    # the ceiling. With the ÷4 task scale this -1.0 now actually bites.)
+    # action_rate 课程 — velocity 的精确渐升 (-0.1 → -1.0 到 iter 1500).
+    # 比旧 -0.4/-0.8/-1.0-by-500 渐升的早期阶段更温和: 上升技能在轻平滑下
+    # 被发现, 然后阻尼收紧.
+    # (旧注, 仍相关: -1.2 终点曾阻止背部恢复; -1.0 是上限. 在 ÷4 任务尺度
+    # 下此 -1.0 现在实际咬合.)
     cfg.curriculum["action_rate_weight"] = CurriculumTermCfg(
         func=microduck_mdp.reward_weight,
         params={
@@ -1029,14 +971,11 @@ def make_microduck_standup_env_cfg(
         },
     )
 
-    # Smoothness-polish curricula — introduce the anti-violence terms only
-    # AFTER the recovery skills exist. ground_state_mix finishes ramping the
-    # hard poses at iter 2500; from 3000 on, prone resets keep exercising the
-    # learned flips while these penalties fine-tune their execution (brake at
-    # arrival, less jitter). Two runs proved the same weights active from
-    # step 0 prevent the flips from ever being DISCOVERED (attempt-tax on
-    # exploration). If recovery degrades after 3000, soften the last stage,
-    # do NOT move the introduction earlier.
+    # 平滑度精修课程 — 仅在恢复技能存在后引入反暴力项. ground_state_mix
+    # 在 iter 2500 完成困难姿态渐升; 从 3000 起, 俯卧 reset 持续练习学到的
+    # 翻转, 同时这些惩罚精调其执行 (到达时刹车, 更少抖动). 两次 run 证明
+    # 相同权重从 step 0 活跃阻止翻转被发现 (对探索的尝试税). 若恢复在 3000
+    # 后退化, 软化最后阶段, 不要将引入提前.
     cfg.curriculum["arrival_damping_weight"] = CurriculumTermCfg(
         func=microduck_mdp.reward_weight,
         params={
@@ -1048,13 +987,11 @@ def make_microduck_standup_env_cfg(
             ],
         },
     )
-    # head_pose_bias: same introduction timing as arrival_damping (see its
-    # comment — timing, not magnitude, is what protects recovery discovery).
-    # Dosage: standup runs head_pose_tracking at 0.75 vs velocity's 2.0 (task
-    # weights ÷4 rebalance), so the bias lands at 1.5 vs velocity's 3.0. At
-    # 1.5 a 15° standing droop costs 0.39/step, 5° costs 0.13/step. If the
-    # standing head is still down after a run, raise the last stage — do NOT
-    # move the introduction earlier.
+    # head_pose_bias: 与 arrival_damping 相同的引入时序 (见其注释 — 时序, 非
+    # 量级, 保护恢复发现). 剂量: standup 在 head_pose_tracking 用 0.75 vs
+    # velocity 的 2.0 (任务权重 ÷4 重平衡), 所以下垂落在 1.5 vs velocity 的
+    # 3.0. 在 1.5 时 15° 站立下垂代价 0.39/step, 5° 代价 0.13/step. 若一次
+    # run 后站立头部仍低, 提高最后阶段 — 不要将引入提前.
     cfg.curriculum["head_pose_bias_weight"] = CurriculumTermCfg(
         func=microduck_mdp.reward_weight,
         params={
@@ -1077,19 +1014,16 @@ def make_microduck_standup_env_cfg(
         },
     )
 
-    # ── Body-control curricula ────────────────────────────────────────────────
-    # Everything below is body-control only — NOTE the early return; add any
-    # unrelated cfg above this line.
+    # ── 身体控制课程 ────────────────────────────────────────────────────────
+    # 下方一切都是身体控制专用 — 注意提前返回; 在此行上方添加任何无关 cfg.
     if not ENABLE_BODY_CONTROL:
         return cfg
 
-    # Tracking weight ramps in at 2500 — exactly when ground_state_mix reaches
-    # its final (hardest) mix, so the recovery-discovery phase trains without
-    # any body-command pressure. Final weight 4.0: at full command the fixed-
-    # stand terms oppose tracking by ~2/step AFTER the relax stages below, and
-    # tracking's marginal gain is ~0.65/step per unit weight → 4.0 wins with
-    # margin. (Without the relax stages the opposition is ~4.3/step and even
-    # the old design's weight 5 loses — the phase-2 lesson.)
+    # 跟踪权重在 2500 渐入 — 恰在 ground_state_mix 达到其最终 (最难) 混合时,
+    # 使恢复发现阶段在无身体指令压力下训练. 最终权重 4.0: 在全指令下固定
+    # 站立项以 ~2/step 反对跟踪, 在下方放松阶段之后, 跟踪的边际增益是
+    # ~0.65/step 每单位权重 → 4.0 以余量获胜. (无放松阶段反对是 ~4.3/step,
+    # 即使旧设计的权重 5 也输 — 阶段 2 教训.)
     cfg.curriculum["body_pose_tracking_weight"] = CurriculumTermCfg(
         func=microduck_mdp.reward_weight,
         params={
@@ -1103,9 +1037,8 @@ def make_microduck_standup_env_cfg(
         },
     )
 
-    # Command range widening, synced to the weight ramp. x/y/yaw stay at their
-    # alive ranges (untracked); only z/roll/pitch widen. z asymmetric — see the
-    # BODY_CMD constants block.
+    # 指令范围加宽, 与权重渐升同步. x/y/yaw 保持其 alive 范围 (未跟踪);
+    # 仅 z/roll/pitch 加宽. z 非对称 — 见 BODY_CMD 常量块.
     _alive_xy = (-BODY_CMD_ALIVE_XY, BODY_CMD_ALIVE_XY)
     _alive_ang = (-BODY_CMD_ALIVE_ANGLE, BODY_CMD_ALIVE_ANGLE)
     cfg.curriculum["body_pose_range"] = CurriculumTermCfg(
@@ -1162,16 +1095,14 @@ def make_microduck_standup_env_cfg(
         },
     )
 
-    # Conflict relax — the standup phase-2 lesson applied to THIS reward set:
-    # the sharp fixed-stand attractors directly out-bid commanded deviations
-    # (at Δz=−2cm/15° tilt: height_stand_sharp −0.83, upright_sharp −0.79,
-    # standing_composite −1.9 per step). Their bootstrap/polish job is done by
-    # 3000; body_pose_tracking at cmd=0 (30% of resamples) takes over the
-    # "sharp peak at nominal stand" role with even tighter stds. The broad
-    # bootstrap layers (height_stand, upright_linear, height_stand_l1,
-    # pose_stand_*) are left untouched — they're what recovery leans on, and
-    # their opposition at full command is mild (~0.9/step total). Standing-
-    # attractor mass is roughly conserved: 6.25 before → 2.2 + tracking 4.0.
+    # 冲突放松 — standup 阶段 2 教训应用于此奖励集: 尖锐固定站立吸引子直接
+    # 出价超过指令偏差 (在 Δz=−2cm/15° 倾斜: height_stand_sharp −0.83,
+    # upright_sharp −0.79, standing_composite −1.9 每 step). 它们的 bootstrap/
+    # 精修工作在 3000 完成; body_pose_tracking 在 cmd=0 (30% 重采样) 接管
+    # "名义站立处的尖峰"角色, 带更紧 std. 宽 bootstrap 层 (height_stand,
+    # upright_linear, height_stand_l1, pose_stand_*) 不动 — 它们是恢复依赖的,
+    # 其在全指令下反对温和 (~0.9/step 总). 站立吸引子质量大致守恒: 之前
+    # 6.25 → 2.2 + 跟踪 4.0.
     cfg.curriculum["height_stand_sharp_weight"] = CurriculumTermCfg(
         func=microduck_mdp.reward_weight,
         params={
@@ -1209,13 +1140,13 @@ def make_microduck_standup_env_cfg(
     return cfg
 
 
-# ── RL runner config ──────────────────────────────────────────────────────────
+# ── RL runner 配置 ──────────────────────────────────────────────────────────
 
 MicroduckStandUpRlCfg = RslRlOnPolicyRunnerCfg(
     actor=RslRlModelCfg(
         hidden_dims=(512, 256, 128),
         activation="elu",
-        obs_normalization=True,  # matches velocity; normalizer MUST be baked into ONNX by export.py
+        obs_normalization=True,  # 匹配 velocity; normalizer 必须由 export.py 烘焙到 ONNX
         distribution_cfg={
             "class_name": "GaussianDistribution",
             "init_std": 1.0,

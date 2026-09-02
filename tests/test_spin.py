@@ -4,13 +4,13 @@ import torch
 
 from mjlab_microduck.tasks import mdp
 
-# Enveloppe du spec : accel 0.5s / régime 1.6s / freinage 0.5s / repos 1.4s sur 4s.
+# 包络: 4s 上 加速 0.5s / 稳态 1.6s / 制动 0.5s / 静止 1.4s.
 _ENV = {"rate_max": 6.0, "accel_end": 0.125, "hold_end": 0.525, "brake_end": 0.650}
 
 
 def test_spin_rate_segment_boundaries():
-    # bornes des 4 segments : 0 au départ, plein régime sur [accel_end, hold_end],
-    # encore plein régime au tout début du freinage, 0 dès le segment de repos.
+    # 4 个段的边界: 起步 0, [accel_end, hold_end] 上满转速,
+    # 制动一开始仍是满转速, 静止段一开始就是 0.
     phase = torch.tensor([0.0, 0.125, 0.30, 0.525, 0.650, 0.80, 0.999])
     w = mdp.spin_rate_by_phase(phase, **_ENV)
     expected = torch.tensor([0.0, 6.0, 6.0, 6.0, 0.0, 0.0, 0.0])
@@ -21,7 +21,7 @@ def test_spin_rate_accel_ramp_is_increasing():
     phase = torch.linspace(0.0, 0.125, 20)
     w = mdp.spin_rate_by_phase(phase, **_ENV)
     assert torch.all(w[1:] >= w[:-1])
-    # milieu de la rampe de lancement -> moitié de la cible
+    # 启动斜坡中点 -> 目标的一半
     mid = mdp.spin_rate_by_phase(torch.tensor([0.0625]), **_ENV)
     assert torch.allclose(mid, torch.tensor([3.0]), atol=1e-6)
 
@@ -30,16 +30,16 @@ def test_spin_rate_brake_ramp_is_decreasing():
     phase = torch.linspace(0.525, 0.6499, 20)
     w = mdp.spin_rate_by_phase(phase, **_ENV)
     assert torch.all(w[1:] <= w[:-1])
-    # milieu du freinage -> moitié de la cible
+    # 制动中点 -> 目标的一半
     mid = mdp.spin_rate_by_phase(torch.tensor([0.5875]), **_ENV)
     assert torch.allclose(mid, torch.tensor([3.0]), atol=1e-6)
 
 
 def test_spin_rate_integral_matches_trapezoid_shape_at_rate_max_6():
-    # Ce test protège la FORME du trapèze (2.1 * rate_max rad par cycle), pas la
-    # cible réellement expédiée : à rate_max=6.0 (hypothétique, cf. _ENV ci-dessus)
-    # ça vaut ~4*pi rad = 2 tours. Enveloppe exacte = 12.6 rad, 4*pi = 12.566 ->
-    # tolérance 1 %. La cible EN VIGUEUR est couverte par le test suivant.
+    # 这个测试保护梯形的 形状 (每周期 2.1 * rate_max rad), 而不是真正
+    # 派发的目标: 在 rate_max=6.0 (假设值, 见上面 _ENV) 下它约等于
+    # 4*pi rad = 2 圈.精确包络 = 12.6 rad, 4*pi = 12.566 -> 1% 容差.
+    # 真正生效的目标由下一个测试覆盖.
     n = 100_000
     phase = (torch.arange(n, dtype=torch.float64) + 0.5) / n
     w = mdp.spin_rate_by_phase(phase, **_ENV)
@@ -48,13 +48,12 @@ def test_spin_rate_integral_matches_trapezoid_shape_at_rate_max_6():
 
 
 def test_spin_rate_max_integrates_to_2_1_times_itself_per_cycle():
-    # LE test qui protège la cible EXPÉDIÉE (mdp.SPIN_RATE_MAX), par opposition au
-    # test ci-dessus qui ne teste que la forme à rate_max=6.0. L'aire sous
-    # l'enveloppe sur un cycle vaut 2.1 * rate_max rad, quel que soit rate_max
-    # (0.25 + 1.6 + 0.25 = 2.1, cf. le commentaire au-dessus des constantes dans
-    # mdp.py). Avec le réglage actuel (SPIN_RATE_MAX = 3.0) ça donne 6.3 rad,
-    # soit ~1 tour -- pas 2. Ce test échoue bruyamment si quelqu'un change la
-    # cible sans réfléchir au nombre de tours que ça implique.
+    # 这个测试保护真正 派发 的目标 (mdp.SPIN_RATE_MAX), 与上面那个
+    # 仅测 rate_max=6.0 形状的测试相对.一周期内包络下的面积等于
+    # 2.1 * rate_max rad, 与 rate_max 无关 (0.25 + 1.6 + 0.25 = 2.1,
+    # 见 mdp.py 常量上方的注释).当前设置 (SPIN_RATE_MAX = 3.0) 下
+    # 它是 6.3 rad, 约 1 圈 —— 不是 2 圈.这个测试在有人不经思考就
+    # 改目标 (那意味着多少圈) 时会响亮失败.
     n = 100_000
     phase = (torch.arange(n, dtype=torch.float64) + 0.5) / n
     w = mdp.spin_rate_by_phase(
@@ -78,14 +77,14 @@ def test_spin_gate_is_normalized_rate():
 
 
 def test_spin_gate_is_zero_over_the_whole_rest_segment():
-    # pendant le repos aucune amorce ne doit pousser au ciseau -> porte nulle,
-    # c'est ce qui donne une sortie de trick propre vers la policy roller.
+    # 静止段里任何 amorce 都不该推剪叉 -> gate 为零,
+    # 这才能干净地从 trick 出口过渡到 roller policy.
     phase = torch.linspace(0.650, 0.999, 50)
     gate = mdp.spin_gate_by_phase(phase, **_ENV)
     assert torch.allclose(gate, torch.zeros_like(gate), atol=1e-6)
 
 
-# ── faux env minimal : permet de tester les wrappers de reward sans MuJoCo ────
+# ── 最小假 env: 让我们能在没有 MuJoCo 的情况下测 reward wrapper ────────────
 class _FakeData:
     def __init__(self, ang_vel_b=None, lin_vel_b=None, joint_pos=None, joint_vel=None):
         self.root_link_ang_vel_b = ang_vel_b
@@ -95,7 +94,7 @@ class _FakeData:
 
 
 class _FakeEntity:
-    """Entity minimale : find_joints() résout par nom depuis un dict {nom: index}."""
+    """最小 Entity: find_joints() 按 {name: index} 字典按名解析."""
 
     def __init__(self, data, joint_ids=None):
         self.data = data
@@ -109,7 +108,7 @@ class _FakeEntity:
             matched = [n for n in names if n in pattern]
         else:
             matched = [n for n in names if re.fullmatch(pattern, n)]
-        assert matched, f"aucun joint ne matche {pattern!r} parmi {names}"
+        assert matched, f"在 {names} 中没有 joint 匹配 {pattern!r}"
         return [self._joint_ids[n] for n in matched], matched
 
 
@@ -139,7 +138,7 @@ class _FakeEnv:
 
 
 def _phase_cmd(phases):
-    """Commande du slot telle que la voit la policy : [cos(2*pi*phi), sin(...), 0]."""
+    """policy 看到的 slot 命令: [cos(2*pi*phi), sin(...), 0]."""
     p = torch.as_tensor(phases, dtype=torch.float32)
     return torch.stack(
         [torch.cos(2 * math.pi * p), torch.sin(2 * math.pi * p), torch.zeros_like(p)],
@@ -159,15 +158,15 @@ def test_spin_rate_reward_peaks_on_exact_match():
     w = torch.tensor([6.0, 6.0])
     target = torch.tensor([6.0, 4.5])
     r = mdp.spin_rate_reward_from_values(w, target, std=1.5)
-    # erreur nulle -> 1.0 ; erreur = 1 std -> exp(-1)
+    # 误差 0 -> 1.0; 误差 = 1 std -> exp(-1)
     assert torch.allclose(r, torch.tensor([1.0, math.exp(-1.0)]), atol=1e-6)
 
 
 def test_spin_rate_track_uses_yaw_and_phase():
-    # phase 0.30 = plein régime -> cible SPIN_RATE_MAX (3.0 rad/s, défaut appelé
-    # ici implicitement). Un robot qui tourne à la cible doit toucher 1.0 ; un
-    # robot immobile doit être largement en dessous (exp(-(3/1.5)^2) = 0.018 au
-    # réglage courant : std=1.5 reste bien calibré à cette cible, cf. mdp.py).
+    # phase 0.30 = 满转速 -> 目标 SPIN_RATE_MAX (3.0 rad/s, 这里隐式
+    # 调用默认值).一个按目标转速的机器人应该得 1.0; 一个静止的机器
+    # 人应该明显更低 (exp(-(3/1.5)^2) = 0.018, 在当前设置下: std=1.5
+    # 在该目标上仍然校准良好, 见 mdp.py).
     ang = torch.tensor([[0.0, 0.0, mdp.SPIN_RATE_MAX], [0.0, 0.0, 0.0]])
     env = _FakeEnv(_FakeEntity(_FakeData(ang_vel_b=ang)), cmd=_phase_cmd([0.30, 0.30]))
     r = mdp.spin_rate_track(env, std=1.5)
@@ -176,7 +175,7 @@ def test_spin_rate_track_uses_yaw_and_phase():
 
 
 def test_spin_rate_track_wants_stillness_during_rest():
-    # phase 0.80 = repos -> cible 0 : tourner encore est puni, être immobile payé.
+    # phase 0.80 = 静止 -> 目标 0: 还在转就被罚, 静止才付费.
     ang = torch.tensor([[0.0, 0.0, 0.0], [0.0, 0.0, 6.0]])
     env = _FakeEnv(_FakeEntity(_FakeData(ang_vel_b=ang)), cmd=_phase_cmd([0.80, 0.80]))
     r = mdp.spin_rate_track(env, std=1.5)
@@ -185,8 +184,7 @@ def test_spin_rate_track_wants_stillness_during_rest():
 
 
 def test_spin_rate_track_penalizes_wrong_direction():
-    # tourner à -SPIN_RATE_MAX (horaire) quand on demande +SPIN_RATE_MAX doit
-    # être pire qu'immobile.
+    # 要求 +SPIN_RATE_MAX 时以 -SPIN_RATE_MAX (顺时针) 转应该比静止更糟.
     ang = torch.tensor([[0.0, 0.0, -mdp.SPIN_RATE_MAX], [0.0, 0.0, 0.0]])
     env = _FakeEnv(_FakeEntity(_FakeData(ang_vel_b=ang)), cmd=_phase_cmd([0.30, 0.30]))
     r = mdp.spin_rate_track(env, std=1.5)
@@ -195,7 +193,7 @@ def test_spin_rate_track_penalizes_wrong_direction():
 
 # ── spin_rate_l1 ─────────────────────────────────────────────────────────────
 def test_spin_rate_l1_is_negative_absolute_error():
-    # phase 0.30 = plein régime -> cible SPIN_RATE_MAX (3.0 rad/s, défaut).
+    # phase 0.30 = 满转速 -> 目标 SPIN_RATE_MAX (3.0 rad/s, 默认).
     ang = torch.tensor([[0.0, 0.0, mdp.SPIN_RATE_MAX], [0.0, 0.0, 1.0]])
     env = _FakeEnv(_FakeEntity(_FakeData(ang_vel_b=ang)), cmd=_phase_cmd([0.30, 0.30]))
     r = mdp.spin_rate_l1(env)
@@ -205,18 +203,17 @@ def test_spin_rate_l1_is_negative_absolute_error():
 
 # ── spin_stay_in_place ───────────────────────────────────────────────────────
 def test_spin_stay_in_place_is_squared_planar_speed():
-    # phase 0.30 = plein régime -> coût plein tarif
+    # phase 0.30 = 满转速 -> 全价成本
     lin = torch.tensor([[0.0, 0.0, 0.0], [0.3, 0.4, 9.0]])
     env = _FakeEnv(_FakeEntity(_FakeData(lin_vel_b=lin)), cmd=_phase_cmd([0.30, 0.30]))
     c = mdp.spin_stay_in_place(env)
-    # 0.3^2 + 0.4^2 = 0.25 ; la composante z est ignorée
+    # 0.3^2 + 0.4^2 = 0.25; z 分量被忽略
     assert torch.allclose(c, torch.tensor([0.0, 0.25]), atol=1e-6)
 
 
 def test_spin_stay_in_place_is_attenuated_during_the_launch_ramp():
-    # Même vitesse, deux phases : dans la rampe de lancement (0.05 < accel_end) le
-    # coût est multiplié par launch_scale, en régime (0.30) il est plein tarif.
-    # C'est ce qui empêche ce terme de s'opposer à l'injection de moment angulaire.
+    # 同一速度, 两个 phase: 启动斜坡 (0.05 < accel_end) 里成本乘以
+    # launch_scale, 稳态 (0.30) 全价.这才能让该项不阻止角动量注入.
     lin = torch.tensor([[0.3, 0.4, 0.0], [0.3, 0.4, 0.0]])
     env = _FakeEnv(_FakeEntity(_FakeData(lin_vel_b=lin)), cmd=_phase_cmd([0.05, 0.30]))
     c = mdp.spin_stay_in_place(env, launch_scale=0.2, accel_end=0.125)
@@ -226,8 +223,8 @@ def test_spin_stay_in_place_is_attenuated_during_the_launch_ramp():
 
 
 def test_spin_stay_in_place_is_full_price_during_rest():
-    # Pendant le repos on veut le robot IMMOBILE : ce terme ne doit PAS être éteint,
-    # contrairement aux amorces (spin_wheel_differential, spin_grounded, ciseau).
+    # 静止段我们要机器人 IMMOBILE: 这项绝不能被关, 与 amorce
+    # (spin_wheel_differential, spin_grounded, 剪叉) 相反.
     lin = torch.tensor([[0.3, 0.4, 0.0]])
     env = _FakeEnv(_FakeEntity(_FakeData(lin_vel_b=lin)), cmd=_phase_cmd([0.80]))
     c = mdp.spin_stay_in_place(env)
@@ -250,13 +247,12 @@ def _wheel_env(vel_rows, phases):
 
 
 def test_wheel_differential_rewards_counter_rolling_wheels():
-    # anti-horaire : roues GAUCHE négatives (patin part en arrière), DROITE
-    # positives -> omega_D - omega_G > 0 -> récompensé.
+    # 逆时针: 左轮为负 (滑动向后), 右轮为正 -> omega_D - omega_G > 0 -> 被奖励.
     env = _wheel_env(
         [
-            [-10.0, -10.0, 10.0, 10.0],  # bon différentiel
-            [10.0, 10.0, 10.0, 10.0],  # tout droit : différentiel nul
-            [10.0, 10.0, -10.0, -10.0],  # différentiel inversé (horaire)
+            [-10.0, -10.0, 10.0, 10.0],  # 好的差速
+            [10.0, 10.0, 10.0, 10.0],  # 直行: 差速为零
+            [10.0, 10.0, -10.0, -10.0],  # 反向差速 (顺时针)
         ],
         [0.30, 0.30, 0.30],
     )
@@ -267,14 +263,14 @@ def test_wheel_differential_rewards_counter_rolling_wheels():
 
 
 def test_wheel_differential_is_gated_off_during_rest():
-    # même bon différentiel, mais en phase de repos -> porte nulle -> pas payé.
+    # 同样好的差速, 但在静止段 -> gate 为零 -> 不付费.
     env = _wheel_env([[-10.0, -10.0, 10.0, 10.0]], [0.80])
     r = mdp.spin_wheel_differential(env, omega_scale=20.0)
     assert torch.allclose(r, torch.zeros(1), atol=1e-6)
 
 
 def test_wheel_differential_saturates():
-    # tanh : au-delà de omega_scale la reward sature, pas de course à la vitesse.
+    # tanh: 超过 omega_scale 后 reward 饱和, 不会出现速度军备竞赛.
     env = _wheel_env([[-10.0, -10.0, 10.0, 10.0], [-100.0, -100.0, 100.0, 100.0]], [0.30, 0.30])
     r = mdp.spin_wheel_differential(env, omega_scale=20.0)
     assert r[1] > r[0]
@@ -299,8 +295,8 @@ def test_spin_grounded_rewards_both_blades_down_and_is_gated():
         sensors={"feet_ground_contact": _FakeSensor(contact)},
     )
     r = mdp.spin_grounded(env, sensor_name="feet_ground_contact")
-    # deux lames au sol en régime -> porte 1.0 ; une seule ou zéro -> 0 ;
-    # deux lames au sol mais en repos -> porte 0.
+    # 稳态下两片刀片着地 -> gate 1.0; 只有一片或零片 -> 0;
+    # 两片着地但在静止段 -> gate 0.
     assert torch.allclose(r, torch.tensor([1.0, 0.0, 0.0, 0.0]), atol=1e-6)
 
 
@@ -320,12 +316,12 @@ def _leg_env(pos_rows, phases):
 
 
 def test_leg_antisymmetry_prefers_scissor_over_mirror():
-    # convention miroir : q_G = -q_D est une pose SYMÉTRIQUE (mauvais ici),
-    # q_G = q_D est le CISEAU (bon ici). Valeur = -mean|q_G - q_D|, donc <= 0.
+    # 镜像约定: q_G = -q_D 是 SYMMETRIC pose (这里不好),
+    # q_G = q_D 是 SCISSOR (这里好).值 = -mean|q_G - q_D|, 所以 <= 0.
     env = _leg_env(
         [
-            [0.4, 0.3, 0.4, 0.3],  # ciseau parfait : q_G == q_D -> 0.0
-            [0.4, 0.3, -0.4, -0.3],  # miroir : écart 0.8 et 0.6 -> -0.7
+            [0.4, 0.3, 0.4, 0.3],  # 完美剪叉: q_G == q_D -> 0.0
+            [0.4, 0.3, -0.4, -0.3],  # 镜像: 偏差 0.8 和 0.6 -> -0.7
         ],
         [0.30, 0.30],
     )
@@ -335,13 +331,13 @@ def test_leg_antisymmetry_prefers_scissor_over_mirror():
 
 
 def test_leg_antisymmetry_is_gated_off_during_rest():
-    # en repos la porte est nulle : rien ne pousse au ciseau, station neutre libre.
+    # 静止段 gate 为零: 没什么推剪叉, 中性自由站位.
     env = _leg_env([[0.4, 0.3, -0.4, -0.3]], [0.80])
     r = mdp.leg_antisymmetry(env)
     assert torch.allclose(r, torch.zeros(1), atol=1e-6)
 
 
-# ── neck_joint_pos_l2 : paramètre pattern ────────────────────────────────────
+# ── neck_joint_pos_l2: pattern 参数 ──────────────────────────────────────────
 _NECK_IDS = {
     "neck_pitch": 0,
     "head_pitch": 1,
@@ -356,14 +352,14 @@ def test_neck_joint_pos_l2_pattern_can_exclude_head_yaw():
             super().__init__(joint_pos=joint_pos)
             self.default_joint_pos = default_joint_pos
 
-    pos = torch.tensor([[0.0, 0.0, 0.0, 1.0]])  # seul head_yaw dévie, de 1 rad
+    pos = torch.tensor([[0.0, 0.0, 0.0, 1.0]])  # 只有 head_yaw 偏 1 rad
     default = torch.zeros(1, 4)
     entity = _FakeEntity(_NeckData(pos, default), joint_ids=_NECK_IDS)
     env = _FakeEnv(entity)
 
-    # motif par défaut : head_yaw compté -> coût 1.0
+    # 默认 pattern: head_yaw 算 -> 成本 1.0
     assert torch.allclose(mdp.neck_joint_pos_l2(env), torch.tensor([1.0]), atol=1e-6)
-    # motif du spin : head_yaw exclu -> coût 0.0 (tête libre en lacet)
+    # spin 的 pattern: head_yaw 被排除 -> 成本 0.0 (头可自由偏航)
     assert torch.allclose(
         mdp.neck_joint_pos_l2(env, pattern=r"^(neck_pitch|head_pitch|head_roll)$"),
         torch.tensor([0.0]),

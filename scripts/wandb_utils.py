@@ -1,4 +1,4 @@
-"""Shared wandb helpers for play_latest and export_latest scripts."""
+"""play_latest 和 export_latest 脚本共享的 wandb 辅助函数."""
 
 import subprocess
 import sys
@@ -11,7 +11,7 @@ WANDB_PROJECT = "pollen-robotics/mjlab_microduck"
 
 
 def find_latest_run(user_filter: str) -> wandb.apis.public.Run | None:
-    """Return the most recent run whose metadata email contains *user_filter*."""
+    """返回 metadata email 中包含 *user_filter* 的最新 run."""
     api = wandb.Api()
     runs = api.runs(WANDB_PROJECT, per_page=100, order="-created_at")
     for run in runs:
@@ -22,12 +22,12 @@ def find_latest_run(user_filter: str) -> wandb.apis.public.Run | None:
 
 
 def find_latest_runs(user_filter, task_match, n):
-    """Return up to *n* most recent runs whose metadata email contains *user_filter* and whose task_id (metadata args[0]).
+    """返回最多 *n* 个最新 run, 其 metadata email 包含 *user_filter*, 且 task_id (metadata args[0])
 
-    satisfies *task_match*.
+    满足 *task_match*.
 
-    task_match: Callable[[str], bool] applied to the wandb task_id string.
-    Ordered most-recent first.
+    task_match: 应用在 wandb task_id 字符串上的 Callable[[str], bool].
+    按最新优先排序.
     """
     api = wandb.Api()
     runs = api.runs(WANDB_PROJECT, per_page=100, order="-created_at")
@@ -53,7 +53,7 @@ def _format_duration(seconds: float) -> str:
 
 
 def print_run_info(run: wandb.apis.public.Run) -> dict:
-    """Print run details and return dict with env_name, run_path, checkpoints."""
+    """打印 run 详情, 返回包含 env_name, run_path, checkpoints 的 dict."""
     meta = run.metadata
     summary = run.summary
     train_cfg = run.config.get("train_cfg", {})
@@ -107,27 +107,27 @@ def print_run_info(run: wandb.apis.public.Run) -> dict:
 
 
 def resolve_run(user: str, task_substr: str | None = None) -> tuple[wandb.apis.public.Run, dict]:
-    """Find latest run for user (optionally filtered to a task-id substring), print info, return (run, info).
+    """查找指定用户的最新 run (可选过滤 task-id 子串), 打印信息, 返回 (run, info).
 
-    Exits on failure.
+    失败时退出.
     """
     if task_substr:
-        print(f"Searching latest '{task_substr}' run for user '{user}'...")
+        print(f"正在搜索用户 '{user}' 的最新 '{task_substr}' run...")
         runs = find_latest_runs(user, lambda t: task_substr.lower() in t.lower(), 1)
         run = runs[0] if runs else None
     else:
-        print(f"Searching latest run for user '{user}'...")
+        print(f"正在搜索用户 '{user}' 的最新 run...")
         run = find_latest_run(user)
     if run is None:
-        suffix = f" matching '{task_substr}'" if task_substr else ""
-        print(f"No run found for user '{user}'{suffix}", file=sys.stderr)
+        suffix = f" (匹配 '{task_substr}')" if task_substr else ""
+        print(f"未找到用户 '{user}' 的 run{suffix}", file=sys.stderr)
         sys.exit(1)
     info = print_run_info(run)
     return run, info
 
 
 def run_command(cmd: list[str], dry_run: bool) -> None:
-    """Print and optionally execute a command from the project root."""
+    """打印并可选地从项目根目录执行命令."""
     print()
     print("Command:")
     print(f"  {' '.join(cmd)}")

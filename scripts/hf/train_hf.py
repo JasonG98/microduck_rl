@@ -1,9 +1,9 @@
-"""Back-compat shim: the submission logic moved to mjlab_microduck.hf_jobs.
+"""向后兼容的 shim: 提交逻辑已迁移到 mjlab_microduck.hf_jobs.
 
-Prefer the integrated flag:
+推荐使用集成的 flag:
     uv run train <task> <train args...> --hf-jobs [--namespace <ns>] [...]
 
-This script keeps the old invocation working:
+这个脚本保持旧的调用方式可用:
     uv run scripts/hf/train_hf.py <task> [submission flags] <train args...>
 """
 

@@ -1,29 +1,28 @@
-"""Microduck SPIN task — rotation rapide sur place, sur rollers.
+"""Microduck SPIN 任务 — 在滚轮上原地快速旋转.
 
-Geste cyclique déclenché au bouton A via le slot --ground-pick du runtime :
-~1 tour anti-horaire à ~3 rad/s puis arrêt propre debout.
+通过 runtime 的 --ground-pick 槽位由按钮 A 触发的循环动作:
+~3 rad/s 逆时针转一圈, 然后干净站立停止.
 
-Hybride :
-  - physique / robot roller  ← microduck_velocity_rollers_env_cfg.py
-  - machinerie phase cyclique ← microduck_roller_crouch_env_cfg.py
-    (commande GroundPickPhaseCommand : [cos(2πφ), sin(2πφ), 0], période 4 s)
+混合体:
+  - 物理 / 滚轮机器人  ← microduck_velocity_rollers_env_cfg.py
+  - 循环相位机制 ← microduck_roller_crouch_env_cfg.py
+    (指令 GroundPickPhaseCommand : [cos(2πφ), sin(2πφ), 0], 周期 4 s)
 
-Différence de fond avec le crouch : la phase pilote une VITESSE DE LACET cible
-(objectif de résultat) et non une pose articulaire. Deux amorces décroissantes
-poussent vers le roulement différentiel — le seul mécanisme physique certain sur
-4 roues passives : patin gauche vers l'arrière, patin droit vers l'avant.
+与 crouch 的根本差异: 相位驱动目标偏航角速度 (结果目标), 而非关节姿态.
+两个递减的引导推动差速滚动 — 4 个被动轮子上唯一确定的物理机制:
+左滑向后, 右滑向前.
 
-Obs 61D unifié → interchangeable au runtime avec roller / ground_pick / crouch.
-Voir docs/superpowers/specs/2026-08-04-spin-env-design.md.
+统一 61D 观测 → 可在 runtime 与 roller / ground_pick / crouch 互换.
+见 docs/superpowers/specs/2026-08-04-spin-env-design.md.
 """
 
 import math
 from copy import deepcopy
 
-# La symétrie G/D transformerait un spin à gauche en spin à droite : interdit ici.
+# 左右对称会把左旋变成右旋: 此处禁止.
 ENABLE_SYMMETRY = False
 
-# DR — repris du roller env
+# DR — 沿用 roller env
 ENABLE_COM_RANDOMIZATION = True
 ENABLE_HEAD_COM_RANDOMIZATION = True
 ENABLE_MASS_INERTIA_RANDOMIZATION = True
@@ -44,8 +43,7 @@ VELOCITY_PUSH_RANGE = (-0.2, 0.2)
 IMU_ORIENTATION_RANDOMIZATION_ANGLE = 6.0
 ENCODER_BIAS_RANGE = (-0.015, 0.015)
 
-# Le bouton peut être pressé à l'arrêt OU en roulement lent : la policy apprend
-# à tuer l'élan résiduel avant/pendant le lancement de la rotation.
+# 按钮可能在停止或慢滚时按下: policy 学会在旋转启动前/期间消除残余动量.
 ENTRY_VELOCITY_X = (0.0, 0.3)
 
 from mjlab.envs import ManagerBasedRlEnvCfg
@@ -71,7 +69,7 @@ from mjlab_microduck.tasks import mdp as microduck_mdp
 from mjlab_microduck.tasks.microduck_velocity_env_cfg import HEAD_BODY_NAMES
 from mjlab_microduck.tasks.symmetry import SYMMETRY_CFG, PpoWithSymmetryCfg
 
-# Enveloppe de phase : constantes canoniques définies dans mdp.py.
+# 相位包络: 规范常量定义在 mdp.py 中.
 SPIN_PERIOD = microduck_mdp.SPIN_PERIOD
 _ENVELOPE = {
     "rate_max": microduck_mdp.SPIN_RATE_MAX,
@@ -79,13 +77,12 @@ _ENVELOPE = {
     "hold_end": microduck_mdp.SPIN_HOLD_END,
     "brake_end": microduck_mdp.SPIN_BRAKE_END,
 }
-# Nuque/tête tenues près du neutre SAUF head_yaw, laissé libre : il peut servir
-# de volant d'inertie pour lancer la rotation.
+# 颈/头保持接近中性, 除 head_yaw 外, 它留自由: 可作为飞轮注入转动惯量.
 NECK_PATTERN_NO_YAW = r"^(neck_pitch|head_pitch|head_roll)$"
 
 
 def make_microduck_spin_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    """Env spin sur rollers, piloté par la phase du slot ground-pick."""
+    """滚轮上的 spin env, 由 ground-pick 槽位的相位驱动."""
     feet_ground_cfg = ContactSensorCfg(
         name="feet_ground_contact",
         primary=ContactMatch(
@@ -117,11 +114,10 @@ def make_microduck_spin_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     assert isinstance(joint_pos_action, JointPositionActionCfg)
     joint_pos_action.scale = 1.0
 
-    # === REWARDS ===
-    # ⚠️ angular_momentum n'est PAS gardée : elle pénalise la norme 3D du moment
-    # angulaire, donc elle combattrait directement le spin. body_ang_vel, elle,
-    # ne pénalise que x/y (« Don't penalize z-angular velocity » dans mjlab) →
-    # gardée, elle mate le ballant roulis/tangage sans gêner la rotation.
+    # === 奖励 ===
+    # ⚠️ angular_momentum 不保留: 它惩罚角动量 3D 范数, 因此会直接对抗 spin.
+    # body_ang_vel 仅惩罚 x/y (mjlab 中 "Don't penalize z-angular velocity") →
+    # 保留, 它压制滚转/俯仰摆动而不妨碍旋转.
     keep = {"upright", "body_ang_vel", "action_rate_l2"}
     for name in list(cfg.rewards.keys()):
         if name not in keep:
@@ -133,26 +129,24 @@ def make_microduck_spin_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     cfg.rewards["body_ang_vel"].weight = -0.05
     cfg.rewards["action_rate_l2"].weight = -1.0
 
-    # Objectif principal : suivre la vitesse de lacet cible ω*(φ) (trapèze).
+    # 主目标: 跟踪目标偏航角速度 ω*(φ) (梯形).
     cfg.rewards["spin_rate_track"] = RewardTermCfg(
         func=microduck_mdp.spin_rate_track,
         weight=6.0,
         params={"command_name": "twist", "std": 1.5, **_ENVELOPE},
     )
-    # Bootstrap L1 : gradient constant quand la gaussienne sature loin de la cible.
+    # Bootstrap L1: 高斯在远离目标饱和时提供恒定梯度.
     cfg.rewards["spin_rate_l1"] = RewardTermCfg(
         func=microduck_mdp.spin_rate_l1,
         weight=0.5,
         params={"command_name": "twist", **_ENVELOPE},
     )
-    # Tourner SUR PLACE, et tuer l'élan d'entrée. Renforcé -1.0 -> -3.0 : au run de
-    # calibrage à 500 it. le tronc translatait à ~0.35 m/s (~ω·demi-voie), signature
-    # d'un pivot sur un seul patin plutôt qu'un spin centré sur le corps — c'est le
-    # seul terme qui distingue un spin centré d'un pivot excentré.
-    # Atténué pendant la rampe de lancement [0, ACCEL_END) : c'est le moment où le
-    # robot doit pousser au sol pour s'injecter du moment angulaire, et où l'élan
-    # d'entrée (jusqu'à 0.3 m/s) doit être CONVERTI en rotation — le facturer plein
-    # tarif là s'opposerait au lancement. Plein tarif sur régime/freinage/repos.
+    # 原地旋转, 并消除入口动量. 由 -1.0 加强至 -3.0: 500 iter 校准 run 中
+    # trunk 平移 ~0.35 m/s (~ω·半轨距), 是单滑板支点而非以躯干为中心的
+    # spin 的特征 — 这是区分中心 spin 与偏心支点的唯一项.
+    # 在启动 ramp [0, ACCEL_END) 期间减弱: 此时机器人需蹬地注入角动量,
+    # 入口动量 (高达 0.3 m/s) 需被转化为旋转 — 全价收费会反对启动.
+    # 在稳速/制动/休息段全价收费.
     cfg.rewards["spin_stay_in_place"] = RewardTermCfg(
         func=microduck_mdp.spin_stay_in_place,
         weight=-3.0,
@@ -162,7 +156,7 @@ def make_microduck_spin_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             "accel_end": microduck_mdp.SPIN_ACCEL_END,
         },
     )
-    # Amorce 1 : tourner EN ROULEMENT (patins en sens opposés), pas en patinage.
+    # 引导 1: 滚动转动 (滑板反向), 而非滑动.
     cfg.rewards["spin_wheel_differential"] = RewardTermCfg(
         func=microduck_mdp.spin_wheel_differential,
         weight=1.0,
@@ -172,7 +166,7 @@ def make_microduck_spin_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             **_ENVELOPE,
         },
     )
-    # Amorce 2 : ciseau des jambes (décroît par curriculum, voir plus bas).
+    # 引导 2: 腿部剪刀差 (由课程衰减, 见下).
     cfg.rewards["leg_antisymmetry"] = RewardTermCfg(
         func=microduck_mdp.leg_antisymmetry,
         weight=1.0,
@@ -182,7 +176,7 @@ def make_microduck_spin_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             **_ENVELOPE,
         },
     )
-    # Les deux lames au sol pendant le spin (pas de vrille en l'air).
+    # spin 期间双脚着地 (而非空中扭动).
     cfg.rewards["spin_grounded"] = RewardTermCfg(
         func=microduck_mdp.spin_grounded,
         weight=0.5,
@@ -192,7 +186,7 @@ def make_microduck_spin_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             **_ENVELOPE,
         },
     )
-    # Stabilité / sim2real
+    # 稳定性 / sim2real
     cfg.rewards["feet_flat"] = RewardTermCfg(
         func=microduck_mdp.feet_flat_penalty,
         weight=-2.0,
@@ -214,13 +208,13 @@ def make_microduck_spin_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     )
     cfg.rewards["joint_torques_l2"] = RewardTermCfg(func=microduck_mdp.joint_torques_l2, weight=-1e-3)
 
-    # === TERMINATIONS ===
+    # === 终止条件 ===
     cfg.terminations["nan_state"] = TerminationTermCfg(
         func=microduck_mdp.robot_state_is_nan,
         time_out=False,
     )
 
-    # === EVENTS ===
+    # === 事件 ===
     cfg.events["reset_action_history"] = EventTermCfg(
         func=microduck_mdp.reset_action_history,
         mode="reset",
@@ -239,10 +233,9 @@ def make_microduck_spin_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         )
 
     cfg.events["reset_base"].params["pose_range"]["z"] = (0.1335, 0.1435)
-    # Élan d'entrée : injecté via reset_root_state_uniform (état par défaut PROPRE
-    # + range), et NON via push_by_setting_velocity en mode reset, qui additionne à
-    # une vitesse racine potentiellement divergente et fait exploser le free-joint
-    # de la base -> NaN. Régression connue du roller_crouch.
+    # 入口动量: 通过 reset_root_state_uniform (CLEAN 默认状态 + range) 注入,
+    # 而非通过 reset 模式的 push_by_setting_velocity, 后者累加到可能发散的
+    # root 速度并使 base free-joint 爆炸 -> NaN. roller_crouch 的已知回归.
     cfg.events["reset_base"].params["velocity_range"] = {"x": ENTRY_VELOCITY_X}
 
     if ENABLE_WHEEL_FRICTION_RANDOMIZATION:
@@ -305,7 +298,7 @@ def make_microduck_spin_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             },
         )
 
-    # === OBSERVATIONS (unified 61D layout) ===
+    # === 观测 (统一 61D 布局) ===
     del cfg.observations["actor"].terms["base_lin_vel"]
     del cfg.observations["critic"].terms["foot_height"]
     del cfg.observations["actor"].terms["height_scan"]
@@ -372,13 +365,13 @@ def make_microduck_spin_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             params={"dim": 6},
         )
 
-    # === COMMAND: phase (comme ground_pick / roller_crouch) ===
+    # === 指令: 相位 (同 ground_pick / roller_crouch) ===
     command: UniformVelocityCommandCfg = cfg.commands["twist"]
     command.rel_standing_envs = 0.0
     command.rel_heading_envs = 0.0
-    # period=4.0 = défaut de --ground-pick-period (rien à passer au runtime) ;
-    # randomize_phase=False -> chaque épisode démarre debout à phase 0, comme le
-    # bouton au déploiement. Épisode 20 s = 5 cycles complets du geste.
+    # period=4.0 = --ground-pick-period 默认 (runtime 无需传参);
+    # randomize_phase=False -> 每个 episode 从站立相位 0 启动, 与部署时按钮一致.
+    # 20 s episode = 5 个完整动作循环.
     cfg.commands["twist"] = microduck_mdp.GroundPickPhaseCommandCfg(
         **{
             **vars(command),
@@ -391,7 +384,7 @@ def make_microduck_spin_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     cfg.scene.terrain.terrain_type = "plane"
     cfg.scene.terrain.terrain_generator = None
 
-    # === CURRICULUM ===
+    # === 课程 ===
     del cfg.curriculum["terrain_levels"]
     del cfg.curriculum["command_vel"]
     cfg.curriculum["action_rate_weight"] = CurriculumTermCfg(
@@ -405,8 +398,7 @@ def make_microduck_spin_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             ],
         },
     )
-    # L'amorce ciseau s'efface : elle lance le bon mécanisme puis laisse la policy
-    # affiner son propre geste (fréquence de pompage libre).
+    # 剪刀差引导衰减: 它启动正确机制后让 policy 精炼自己的动作 (自由泵动频率).
     cfg.curriculum["leg_antisym_weight"] = CurriculumTermCfg(
         func=microduck_mdp.reward_weight,
         params={

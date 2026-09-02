@@ -1,7 +1,7 @@
-"""Checkpoint uploader run inside an HF Job.
+"""在 HF Job 内运行的 checkpoint 上传器.
 
-Watches `logs/rsl_rl/**/model_*.pt` and uploads new/updated files to the target HF Model repo. Designed to be `nohup uv
-run`-launched from the job bootstrap, with auth coming from the HF_TOKEN secret injected by `hf jobs run`.
+监视 `logs/rsl_rl/**/model_*.pt` 并将新增/更新的文件上传到目标 HF Model repo. 设计为从 job bootstrap
+以 `nohup uv run` 方式启动, 认证来自 `hf jobs run` 注入的 HF_TOKEN secret.
 """
 
 from __future__ import annotations
@@ -15,10 +15,10 @@ from huggingface_hub import CommitOperationAdd, HfApi
 
 
 def main() -> int:
-    """Watch a checkpoint directory and upload new files to a Hugging Face repo."""
+    """监视 checkpoint 目录并上传新文件到 Hugging Face repo."""
     repo_id = os.environ.get("CKPT_REPO")
     if not repo_id:
-        print("[uploader] CKPT_REPO not set, exiting", flush=True)
+        print("[uploader] CKPT_REPO 未设置, 退出", flush=True)
         return 1
 
     poll_interval = float(os.environ.get("CKPT_POLL_INTERVAL", "60"))
@@ -29,13 +29,13 @@ def main() -> int:
     api = HfApi()
     api.create_repo(repo_id, repo_type="model", private=True, exist_ok=True)
     mode = "one-shot" if one_shot else f"every {poll_interval}s"
-    print(f"[uploader] watching {root} -> {repo_id} ({mode})", flush=True)
+    print(f"[uploader] 正在监视 {root} -> {repo_id} ({mode})", flush=True)
 
     sent: dict[Path, float] = {}
     while True:
         try:
             files = list(root.glob("**/model_*.pt"))
-            # also pick up the dumped configs once
+            # 也顺便捡起 dump 出来的配置
             files += list(root.glob("**/params/*.yaml"))
             files += list(root.glob("**/params/*.json"))
 
@@ -47,7 +47,7 @@ def main() -> int:
                     continue
                 if sent.get(f) == mtime:
                     continue
-                # use path-in-repo relative to logs/rsl_rl so the repo mirrors run dirs
+                # path-in-repo 相对于 logs/rsl_rl, 使 repo 镜像 run 目录
                 rel = f.relative_to(root)
                 to_upload.append(CommitOperationAdd(path_in_repo=str(rel), path_or_fileobj=str(f)))
                 sent[f] = mtime
@@ -60,9 +60,9 @@ def main() -> int:
                     operations=to_upload,
                     commit_message=msg,
                 )
-                print(f"[uploader] pushed {len(to_upload)} file(s)", flush=True)
+                print(f"[uploader] 已推送 {len(to_upload)} 个文件", flush=True)
         except Exception as e:
-            print(f"[uploader] error: {e}", flush=True)
+            print(f"[uploader] 错误: {e}", flush=True)
 
         if one_shot:
             return 0

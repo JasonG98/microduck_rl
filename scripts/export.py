@@ -1,4 +1,4 @@
-"""Script to play RL agent with RSL-RL."""
+"""导出 RL 智能体为 ONNX 的脚本."""
 
 import re
 import sys
@@ -20,13 +20,13 @@ from rsl_rl.runners import OnPolicyRunner
 
 @dataclass(frozen=True)
 class ExportConfig:
-    """Configuration for ONNX policy export."""
+    """ONNX 策略导出配置."""
 
     onnx_file: str = "output.onnx"
     agent: Literal["zero", "random", "trained"] = "trained"
     registry_name: str | None = None
     wandb_run_path: str | None = None
-    checkpoint: int | None = None  # Select checkpoint by iteration number (e.g. 3000)
+    checkpoint: int | None = None  # 按迭代次数选择 checkpoint (例如 3000)
     checkpoint_file: str | None = None
     motion_file: str | None = None
     num_envs: int | None = None
@@ -38,12 +38,12 @@ class ExportConfig:
     camera: int | str | None = None
     viewer: Literal["auto", "native", "viser"] = "auto"
 
-    # Internal flag used by demo script.
+    # 内部标志, 由 demo 脚本使用.
     _demo_mode: tyro.conf.Suppress[bool] = False
 
 
 def run_export(task_id: str, cfg: ExportConfig):
-    """Export the trained policy for the given task to ONNX format."""
+    """将指定任务的训练策略导出为 ONNX 格式."""
     configure_torch_backends()
 
     device = cfg.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -54,7 +54,7 @@ def run_export(task_id: str, cfg: ExportConfig):
     DUMMY_MODE = cfg.agent in {"zero", "random"}
     TRAINED_MODE = not DUMMY_MODE
 
-    # Check if this is a motion tracking task.
+    # 检查这是否是一个 motion tracking 任务.
     is_motion_tracking = (
         env_cfg.commands is not None
         and "motion" in env_cfg.commands
@@ -63,7 +63,7 @@ def run_export(task_id: str, cfg: ExportConfig):
     is_tracking_task = is_motion_tracking
 
     if is_tracking_task and cfg._demo_mode:
-        # Demo mode: use uniform sampling to see more diversity with num_envs > 1.
+        # Demo 模式: 使用均匀采样以便在 num_envs > 1 时看到更多多样性.
         assert env_cfg.commands is not None
         motion_cmd = env_cfg.commands["motion"]
         assert isinstance(motion_cmd, MotionCommandCfg)
@@ -74,7 +74,7 @@ def run_export(task_id: str, cfg: ExportConfig):
         motion_cmd = env_cfg.commands["motion"]
         assert isinstance(motion_cmd, MotionCommandCfg)
 
-        # Check if motion file is already set and exists
+        # 检查 motion file 是否已设置且存在
         motion_file_already_set = (
             hasattr(motion_cmd, "motion_file")
             and motion_cmd.motion_file is not None
@@ -84,7 +84,7 @@ def run_export(task_id: str, cfg: ExportConfig):
         if DUMMY_MODE:
             if not cfg.registry_name:
                 raise ValueError("Tracking tasks require `registry_name` when using dummy agents.")
-            # Check if the registry name includes alias, if not, append ":latest".
+            # 检查 registry name 是否包含 alias, 若不包含则追加 ":latest".
             registry_name = cfg.registry_name
             if ":" not in registry_name:
                 registry_name = registry_name + ":latest"
@@ -100,7 +100,7 @@ def run_export(task_id: str, cfg: ExportConfig):
             elif motion_file_already_set:
                 print(f"[INFO]: Using motion file from env config: {motion_cmd.motion_file}")
             else:
-                # Try to download from wandb artifacts
+                # 尝试从 wandb artifacts 下载
                 import wandb
 
                 api = wandb.Api()
@@ -129,7 +129,7 @@ def run_export(task_id: str, cfg: ExportConfig):
                 raise FileNotFoundError(f"Checkpoint file not found: {resume_path}")
             print(f"[INFO]: Loading checkpoint: {resume_path.name}")
         elif cfg.checkpoint is not None:
-            # Select a specific checkpoint iteration, from wandb or local.
+            # 从 wandb 或本地选择一个特定迭代的 checkpoint.
             checkpoint_filename = f"model_{cfg.checkpoint}.pt"
             if cfg.wandb_run_path is not None:
                 import wandb
@@ -156,7 +156,7 @@ def run_export(task_id: str, cfg: ExportConfig):
             if cfg.wandb_run_path is None:
                 raise ValueError("`wandb_run_path` is required when `checkpoint_file` is not provided.")
             resume_path, was_cached = get_wandb_checkpoint_path(log_root_path, Path(cfg.wandb_run_path))
-            # Extract run_id and checkpoint name from path for display.
+            # 从路径中提取 run_id 和 checkpoint 名称用于显示.
             run_id = resume_path.parent.name
             checkpoint_name = resume_path.name
             cached_str = "cached" if was_cached else "downloaded"
@@ -177,7 +177,7 @@ def run_export(task_id: str, cfg: ExportConfig):
 
     if TRAINED_MODE and cfg.video:
         print("[INFO] Recording videos during play")
-        assert log_dir is not None  # log_dir is set in TRAINED_MODE block
+        assert log_dir is not None  # log_dir 在 TRAINED_MODE 块中已设置
         env = VideoRecorder(
             env,
             video_folder=log_dir / "videos" / "play",
@@ -211,12 +211,12 @@ def run_export(task_id: str, cfg: ExportConfig):
         runner.load(str(resume_path), map_location=device)
         runner.get_inference_policy(device=device)
 
-    # mjlab 1.3.0: ONNX export + metadata moved to mjlab.rl.exporter_utils and
-    # the runner's built-in export_policy_to_onnx. Observation normalization is
-    # baked into the exported graph automatically — EmpiricalNormalization is a
-    # submodule of the policy's MLPModel (obs_normalization=True in RslRlModelCfg),
-    # so export_policy_to_onnx emits actor(normalizer(obs)). No manual normalizer
-    # handling needed (the old export_velocity_policy_as_onnx path is gone).
+    # mjlab 1.3.0: ONNX 导出 + metadata 移到了 mjlab.rl.exporter_utils 和
+    # runner 内置的 export_policy_to_onnx. 观测归一化会自动烘焙到导出的
+    # 计算图中 — EmpiricalNormalization 是 policy 的 MLPModel 的子模块
+    # (RslRlModelCfg 中 obs_normalization=True), 因此 export_policy_to_onnx
+    # 输出的是 actor(normalizer(obs)). 不需要手动处理归一化器
+    # (旧的 export_velocity_policy_as_onnx 路径已移除).
     from mjlab.rl.exporter_utils import attach_metadata_to_onnx, get_base_metadata
 
     onnx_path = Path(cfg.onnx_file).resolve()
@@ -234,9 +234,9 @@ def run_export(task_id: str, cfg: ExportConfig):
 
 
 def main():
-    """CLI entrypoint: export a trained policy to ONNX format."""
-    # Parse first argument to choose the task.
-    # Import tasks to populate the registry.
+    """CLI 入口: 将训练好的策略导出为 ONNX 格式."""
+    # 解析第一个参数以选择任务.
+    # 导入 tasks 以填充注册表.
     import mjlab.tasks  # noqa: F401
 
     all_tasks = list_tasks()
@@ -246,7 +246,7 @@ def main():
         return_unknown_args=True,
     )
 
-    # Parse the rest of the arguments + allow overriding env_cfg and agent_cfg.
+    # 解析其余参数 + 允许覆盖 env_cfg 和 agent_cfg.
     agent_cfg = load_rl_cfg(chosen_task)
 
     args = tyro.cli(

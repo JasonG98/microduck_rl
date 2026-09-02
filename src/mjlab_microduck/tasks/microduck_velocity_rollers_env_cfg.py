@@ -1,57 +1,53 @@
-"""Microduck velocity environment — roller skate variant.
+"""Microduck velocity 环境 — 轮滑变体.
 
-MIGRATED to mjlab 1.3.0 + canonical BAM (2026-07), matching the velocity env's
-sim2real machinery, and updated for the NEW roller model:
+已迁移到 mjlab 1.3.0 + 标准 BAM (2026-07), 与 velocity 环境的 sim2real 机制
+对齐, 并针对新 roller 模型更新:
 
-  - `get_walk_rollers_spec` now loads `robot_allcollisions_rollers.xml`
-    (it silently loaded the wheel-less standup model before): 14 actuated
-    joints + 4 passive wheels (passive_{L,R}{F,R}wheel), two per blade,
-    INTERSPERSED in the joint order (after each ankle) — everything resolves
-    joints by NAME, never by index.
-  - Legs run the canonical BAM actuator like every other variant (was a plain
-    XML PD — an actuator-physics mismatch, and no joint-friction DR).
-  - Obs migrated to the unified 61D layout (twist + zero-padded head/body
-    command slots) so roller policies load through the runtime's
-    --new-cmd-obs path. Symmetry OFF (SYMMETRY_CFG is hardcoded for the old
-    51D layout).
-  - DR/noise/delays matched to the velocity env's FIXED (non-accumulating,
-    per-env-verified) versions; wheel-bearing frictionloss DR kept
-    (dr.dof_frictionloss on the passive wheels + existing curriculum).
+  - `get_walk_rollers_spec` 现在加载 `robot_allcollisions_rollers.xml`
+    (之前静默加载无轮 standup 模型): 14 个驱动关节 + 4 个被动轮
+    (passive_{L,R}{F,R}wheel), 每个刀刃两个, 关节顺序中交叉排列 (在每个踝
+    之后) — 一切都按 NAME 而非索引解析关节.
+  - 腿部运行标准 BAM 执行器, 与其他变体一致 (原为纯 XML PD — 执行器物理
+    不匹配, 且无关节摩擦 DR).
+  - Obs 迁移到统一 61D 布局 (twist + 零填充 head/body 指令槽位), 使 roller
+    policy 通过 runtime 的 --new-cmd-obs 路径加载. 对称性关闭
+    (SYMMETRY_CFG 是为旧的 51D 布局硬编码的).
+  - DR/noise/delays 与 velocity 环境的 FIXED (非累积, 每环境验证) 版本对齐;
+    轮轴承 frictionloss DR 保留 (被动轮上的 dr.dof_frictionloss + 现有课程).
 
-Task design (unchanged — the roller recipe):
-  cmd_x semantics: 0 = coast, >0 = push to accelerate, <0 = brake.
-  cmd[2] = heading error via RelativeHeadingVelocityCommand.
-  Sole positive task reward is wheel_speed — the robot must actually spin its
-  wheels; braking/skating_air_time/forward_lean/heading_tracking shape the
-  skating style.
+任务设计 (不变 — roller 配方):
+  cmd_x 语义: 0 = 滑行, >0 = 推加速, <0 = 刹车.
+  cmd[2] = 通过 RelativeHeadingVelocityCommand 的航向误差.
+  唯一正任务奖励是 wheel_speed — 机器人必须真正转动轮子; 制动/
+  skating_air_time/forward_lean/heading_tracking 塑造滑行风格.
 """
 
 import math
 from copy import deepcopy
 
-# Symmetry — OFF: SYMMETRY_CFG's obs permutation is hardcoded for the old 51D
-# layout and breaks on the 61D obs (same situation as all other v1.5+ envs).
+# 对称性 — 关闭: SYMMETRY_CFG 的 obs 置换为旧 51D 布局硬编码, 在 61D obs 上
+# 会失效 (与所有其他 v1.5+ 环境情况相同).
 ENABLE_SYMMETRY = False
 
-# ── Domain randomisation toggles (matched to the velocity env) ────────────────
+# ── Domain randomisation 开关 (与 velocity 环境对齐) ────────────────────────
 ENABLE_COM_RANDOMIZATION = True
 ENABLE_HEAD_COM_RANDOMIZATION = True
 ENABLE_MASS_INERTIA_RANDOMIZATION = True
-ENABLE_JOINT_FRICTION_RANDOMIZATION = True  # BAM friction budget per-env (legs)
-ENABLE_ARMATURE_RANDOMIZATION = True  # legs only — NOT the wheel bearings
-ENABLE_WHEEL_FRICTION_RANDOMIZATION = True  # bearing frictionloss on passive wheels
+ENABLE_JOINT_FRICTION_RANDOMIZATION = True  # 每环境 BAM 摩擦预算 (腿部)
+ENABLE_ARMATURE_RANDOMIZATION = True  # 仅腿部 — 不含轮轴承
+ENABLE_WHEEL_FRICTION_RANDOMIZATION = True  # 被动轮上的轴承 frictionloss
 ENABLE_VELOCITY_PUSHES = True
-ENABLE_IMU_ORIENTATION_RANDOMIZATION = True  # obs-level per-env rotation
+ENABLE_IMU_ORIENTATION_RANDOMIZATION = True  # obs 层每环境旋转
 ENABLE_ENCODER_BIAS = True
 
-# ── Ranges (matched to the velocity env unless roller-specific) ───────────────
-COM_RANDOMIZATION_RANGE = 0.003  # ±3mm initial, ramped via curriculum
+# ── 范围 (与 velocity 环境对齐, 除非 roller 专有) ───────────────────────────
+COM_RANDOMIZATION_RANGE = 0.003  # ±3mm 初始, 通过课程渐升
 HEAD_COM_RANDOMIZATION_RANGE = 0.003
 MASS_INERTIA_RANDOMIZATION_RANGE = (0.95, 1.05)
 JOINT_FRICTION_RANDOMIZATION_RANGE = (0.9, 1.1)
 ARMATURE_RANDOMIZATION_RANGE = (0.9, 1.1)
 VELOCITY_PUSH_INTERVAL_S = (3.0, 6.0)
-VELOCITY_PUSH_RANGE = (-0.2, 0.2)  # roller-specific: gentler than walk ±0.3
+VELOCITY_PUSH_RANGE = (-0.2, 0.2)  # roller 专有: 比 walk 的 ±0.3 更温和
 IMU_ORIENTATION_RANDOMIZATION_ANGLE = 6.0
 ENCODER_BIAS_RANGE = (-0.015, 0.015)
 
@@ -74,8 +70,8 @@ from mjlab_microduck.tasks.symmetry import SYMMETRY_CFG, PpoWithSymmetryCfg
 
 
 def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    """Create Microduck roller skate velocity tracking environment configuration."""
-    # passive_.*: 999.0 → passive wheel joints are matched but effectively ignored
+    """创建 Microduck 轮滑速度跟踪环境配置."""
+    # passive_.*: 999.0 → 被动轮关节被匹配但实际被忽略
     std_standing = {
         r".*hip_yaw.*": 0.05,
         r".*hip_roll.*": 0.05,
@@ -89,7 +85,7 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
 
     std_walking = {
         r".*hip_yaw.*": 0.3,
-        r".*hip_roll.*": 0.6,  # loosened: skating requires wide lateral push
+        r".*hip_roll.*": 0.6,  # 放宽: 滑行需要宽的横向推力
         r".*hip_pitch.*": 0.4,
         r".*knee.*": 0.4,
         r".*ankle.*": 0.25,
@@ -100,7 +96,7 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
 
     std_running = {
         r".*hip_yaw.*": 0.5,
-        r".*hip_roll.*": 0.8,  # loosened: skating requires wide lateral push
+        r".*hip_roll.*": 0.8,  # 放宽: 滑行需要宽的横向推力
         r".*hip_pitch.*": 0.8,
         r".*knee.*": 0.8,
         r".*ankle.*": 0.5,
@@ -109,10 +105,9 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
         r".*passive_.*": 999.0,
     }
 
-    # 2026-07 model: the roller_blade bodies were merged into the ankles (blade
-    # mesh is now a visual geom on ankle_{l,r}_v1); the tires hang directly off
-    # the ankles. Each ankle subtree's only collision geoms are its two tires,
-    # so this keeps the old per-foot semantics: 2 slots, left first.
+    # 2026-07 模型: roller_blade body 被并入踝部 (刀刃网格现在是
+    # ankle_{l,r}_v1 上的视觉 geom); 轮胎直接挂在踝部下. 每个踝子树唯一的
+    # 碰撞 geom 是它的两个轮胎, 所以这保留了旧的每足语义: 2 槽, 左在前.
     feet_ground_cfg = ContactSensorCfg(
         name="feet_ground_contact",
         primary=ContactMatch(
@@ -138,22 +133,21 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
 
     cfg = make_velocity_env_cfg()
 
-    # Robot setup
+    # 机器人设置
     cfg.scene.entities = {"robot": MICRODUCK_WALK_ROLLERS_ROBOT_CFG}
     cfg.scene.sensors = (feet_ground_cfg, self_collision_cfg)
     cfg.viewer.body_name = "trunk_base"
 
-    # Action configuration
+    # 动作配置
     joint_pos_action = cfg.actions["joint_pos"]
     assert isinstance(joint_pos_action, JointPositionActionCfg)
     joint_pos_action.scale = 1.0
-    # NOTE: an env-side action clip was tried here to bound the target, but the
-    # deployment pipeline (infer_policy.py) does NOT clip → the clip would only
-    # exist in sim, a train/deploy mismatch. The over-command deterrent lives
-    # policy-side instead (action_over_limit reward below), baked into the network
-    # so it transfers with the ONNX.
+    # 注意: 曾在此尝试环境侧的 action clip 以限制目标, 但部署流水线
+    # (infer_policy.py) 不裁剪 → clip 只存在于仿真, 造成训练/部署不匹配.
+    # 过度指令的威慑放在 policy 侧 (下方的 action_over_limit 奖励), 烤进
+    # 网络中, 随 ONNX 转移.
 
-    # === REWARDS ===
+    # === 奖励 ===
     keep = {"pose", "upright", "body_ang_vel", "angular_momentum", "action_rate_l2"}
     for name in list(cfg.rewards.keys()):
         if name not in keep:
@@ -184,10 +178,9 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
         weight=-1.0,
         params={"sensor_name": "self_collision"},
     )
-    # Gated to the STANCE foot only (sensor_name) so lifting the swing foot is no
-    # longer punished — the old ungated -5.0 was minimised by keeping both blades
-    # flat on the ground (the swizzle) and actively fought the stride. Weight also
-    # softened -5.0 -> -2.0 to leave room for a slightly angled push.
+    # 仅门控到 STANCE 脚 (sensor_name), 这样抬摆动脚不再受惩罚 — 旧的未门控
+    # -5.0 通过让两个刀刃都平贴地面 (swizzle) 来最小化, 并主动对抗跨步.
+    # 权重也软化了 -5.0 -> -2.0, 留出略微倾斜推力的空间.
     cfg.rewards["feet_flat"] = RewardTermCfg(
         func=microduck_mdp.feet_flat_penalty,
         weight=-2.0,
@@ -199,63 +192,55 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
     cfg.rewards["neck_action_rate_l2"] = RewardTermCfg(func=microduck_mdp.neck_action_rate_l2, weight=-0.5)
     cfg.rewards["neck_joint_pos_l2"] = RewardTermCfg(func=microduck_mdp.neck_joint_pos_l2, weight=-0.5)
     cfg.rewards["joint_torques_l2"] = RewardTermCfg(func=microduck_mdp.joint_torques_l2, weight=-1e-3)
-    # Deter OVER-COMMANDING a joint past its hard stop (policy-side, transfers via
-    # the ONNX). hip_roll's ±0.38 rad limit vs the ±10 rad ctrlrange let the low-kp
-    # servo be commanded far past the stop and slam it with max torque — a fragile
-    # sim-only trick. This penalises only the COMMAND beyond (limit + 0.3 overshoot),
-    # so the joint keeps its full reachable range (a qpos penalty stole that range
-    # and broke the gait) while the wild over-drive is discouraged.
+    # 威慑 OVER-COMMANDING 关节越过其硬限位 (policy 侧, 通过 ONNX 转移).
+    # hip_roll 的 ±0.38 rad 限位对比 ±10 rad ctrlrange, 让低 kp 舵机可被指令
+    # 远超限位并以最大力矩撞击 — 一个脆弱的纯仿真把戏. 此项仅惩罚超过
+    # (限位 + 0.3 过冲) 的 COMMAND, 所以关节保留全部可达范围 (qpos 惩罚会
+    # 偷走该范围并破坏步态), 同时抑制野蛮的过驱.
     cfg.rewards["action_over_limit"] = RewardTermCfg(
         func=microduck_mdp.action_over_limit_penalty,
         weight=-0.5,
         params={"action_name": "joint_pos", "overshoot": 0.3},
     )
-    # Pull hip_roll back toward neutral so the stance stops resting splayed on the
-    # hip_roll limits. L1 = constant gradient: it gently closes the legs AT REST,
-    # but the strong stride rewards (wheel_speed, single_support, air_time) easily
-    # overpower it during an active push → closes the posture WITHOUT preventing
-    # the lateral push stroke. Tune: raise if still splayed, lower if it flattens
-    # the stride. (Physics caveat: if the soft hip_roll servo can't hold a narrow
-    # stance under body weight, the policy will bend knees / lower CoM to unload
-    # it — or, if no stable narrow stance exists, it stays partly splayed.)
+    # 将 hip_roll 拉回中立, 使站姿不再靠在 hip_roll 限位上外撇. L1 = 常量
+    # 梯度: 它在静止时温和地并拢双腿, 但强跨步奖励 (wheel_speed,
+    # single_support, air_time) 在主动推力时轻松压过它 → 闭合姿态而不阻止
+    # 横向推力行程. 调参: 仍外撇就调高, 压扁跨步就调低. (物理注意: 如果
+    # 软 hip_roll 舵机在体重下无法保持窄站姿, policy 会弯膝/降 CoM 来卸载
+    # — 或, 如果不存在稳定窄站姿, 它会保持部分外撇.)
     cfg.rewards["hip_roll_neutral"] = RewardTermCfg(
         func=microduck_mdp.joint_deviation_l1,
-        weight=-2.0,  # -1.0 -> -2.0: stronger centring pull. Sim already keeps hip_roll
-        # narrow, but a stronger corrective may help the REAL robot resist
-        # whatever spreads the legs (deployment/disturbance). Lower if it
-        # flattens the push.
+        weight=-2.0,  # -1.0 -> -2.0: 更强的对中拉力. 仿真已让 hip_roll
+        # 保持窄, 但更强的修正可能帮助真机抵抗让腿外撇的因素
+        # (部署/扰动). 压扁推力就调低.
         params={"asset_cfg": SceneEntityCfg("robot", joint_names=(r".*hip_roll.*",))},
     )
-    # Sole positive task reward — robot must spin wheels to get anything
-    # vel_scale 0.5 -> 0.3: the tanh target speed. Measured on a trained ckpt, the
-    # policy only reaches ~0.33 m/s at max push, so a 0.5 target sat on the
-    # un-saturated tanh slope and kept pushing it to go faster than it can (over-
-    # reach -> launch instability). 0.3 saturates near the achievable speed, so it
-    # is 'content' there instead of over-driving.
+    # 唯一正任务奖励 — 机器人必须转轮才能获得任何奖励
+    # vel_scale 0.5 -> 0.3: tanh 目标速度. 在训练好的 ckpt 上实测, policy
+    # 在最大推力下仅达 ~0.33 m/s, 所以 0.5 的目标停在未饱和的 tanh 斜坡上,
+    # 不断推它超过能力 (过度延伸 → 起飞不稳). 0.3 在可达速度附近饱和, 所以
+    # 它在那里"满足"而非过驱.
     cfg.rewards["wheel_speed"] = RewardTermCfg(
         func=microduck_mdp.wheel_speed_reward,
         weight=10.0,
         params={"command_name": "twist", "vel_scale": 0.3},
     )
-    # Brake: reward stopping when cmd_x < 0. Silent at cmd_x >= 0 (coast/push).
+    # 制动: cmd_x < 0 时奖励停止. cmd_x >= 0 时静默 (滑行/推力).
     cfg.rewards["braking"] = RewardTermCfg(
         func=microduck_mdp.braking_reward,
         weight=1.0,
         params={"command_name": "twist", "vel_std": 0.3},
     )
-    # Air time during push: pay the recovery-foot lift, but ONLY when the body is
-    # actually moving forward (vel_gate_ref) — otherwise a fast in-place flutter
-    # farmed this. threshold_min raised 0.15 → 0.25 to forbid ultra-short swings
-    # (caps the frantic kick cadence); glide below rewards the slow phase.
-    # air_time rewards each swing → drives swing FREQUENCY; glide rewards staying
-    # on one blade → drives commitment. Balance tilted toward glide (3.0) over
-    # air_time (2.0) because the cadence was still too fast. air_time kept high
-    # enough (2.0) that lifting the foot stays worthwhile.
-    # Calm gait: the aggressive [0.40, 1.00] window forced big long swings ->
-    # violent kicks that tipped the real robot. Back to a gentle [0.15, 0.45]
-    # (small swings allowed, none forced long) and weight 2.0 -> 1.5 so swinging
-    # is less incentivised (lower cadence). glide (below) rewards the coast, so it
-    # pushes only occasionally.
+    # 推力时的 air time: 支付恢复脚的抬升, 但仅在身体确实向前移动时
+    # (vel_gate_ref) — 否则快速原地抖动会刷这项. threshold_min 从 0.15 升到
+    # 0.25 以禁止超短摆动 (限制狂躁踢腿节奏); 下方的 glide 奖励慢速相位.
+    # air_time 奖励每次摆动 → 驱动摆动频率; glide 奖励保持在单刀刃 → 驱动
+    # 承诺. 平衡偏向 glide (3.0) 而非 air_time (2.0), 因为节奏仍太快.
+    # air_time 保持足够高 (2.0) 使抬脚仍值得.
+    # 平稳步态: 激进的 [0.40, 1.00] 窗口强迫大而长的摆动 → 暴力踢腿让真机
+    # 翻倒. 回到温和的 [0.15, 0.45] (允许小摆动, 不强迫长摆动), 权重
+    # 2.0 -> 1.5 使摆动激励降低 (更低节奏). glide (下方) 奖励滑行, 所以
+    # 它只偶尔推力.
     cfg.rewards["skating_air_time"] = RewardTermCfg(
         func=microduck_mdp.skating_air_time_reward,
         weight=1.5,
@@ -267,10 +252,9 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
             "vel_gate_ref": 0.2,
         },
     )
-    # Glide phase (single-support REQUIRED, unlike the earlier broken attempt):
-    # reward coasting on one blade with quiet legs so the policy commits to each
-    # stroke instead of kicking frantically. Weight raised 1.5 → 3.0 to actually
-    # out-weigh the swing-frequency pull of air_time.
+    # 滑行相位 (要求单支撑, 不同于之前失败的尝试): 奖励在一只刀刃上滑行
+    # 且腿部安静, 让 policy 承诺到每次划桨而非狂躁踢腿. 权重从 1.5 升到
+    # 3.0 以真正压过 air_time 的摆动频率拉力.
     cfg.rewards["glide"] = RewardTermCfg(
         func=microduck_mdp.glide_reward,
         weight=4.0,
@@ -280,15 +264,12 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
             "vel_ref": 0.2,
         },
     )
-    # NOTE: a recover_pose reward (reward default leg pose + quiet + coasting during
-    # the pause) was tried to get "stroke -> recover-to-neutral -> stroke", but
-    # rewarding the SYMMETRIC default posture + dropping single_support's double
-    # penalty re-opened the symmetric swizzle -> reverted. A proper retry must be
-    # PHASE-GATED (reward the neutral only briefly right after a stroke, not
-    # continuously) and keep the double-support penalty.
-    # Single-support stride vs double-support swizzle. Rewards exactly-one-blade-
-    # down and penalises both-down while pushing — the core anti-swizzle signal.
-    # Gated on forward speed too, so stepping that doesn't propel earns nothing.
+    # 注意: 曾试过 recover_pose 奖励 (奖励默认腿姿 + 安静 + 暂停时滑行) 以
+    # 实现 "划桨 → 恢复到中立 → 划桨", 但奖励对称默认姿态 + 去掉
+    # single_support 的双支撑惩罚重新打开了对称 swizzle → 回退. 正确重试
+    # 必须相位门控 (仅在划桨后短暂奖励中立, 而非持续), 并保留双支撑惩罚.
+    # 单支撑跨步 vs 双支撑 swizzle. 奖励恰好一刃着地并惩罚推力时双刃着地
+    # — 核心反 swizzle 信号. 也门控前向速度, 使不推进的迈步无收益.
     cfg.rewards["single_support"] = RewardTermCfg(
         func=microduck_mdp.single_support_reward,
         weight=3.0,
@@ -298,46 +279,43 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
             "vel_gate_ref": 0.2,
         },
     )
-    # Balance left/right leg usage. With symmetry augmentation OFF nothing stops a
-    # lopsided stride (pushing mostly with one leg) that veers and destabilises,
-    # esp. at launch. Penalises the cumulative swing-time imbalance |L-R|/(L+R);
-    # the instantaneous one-foot-swinging asymmetry of a real stride is fine.
+    # 平衡左/右腿使用. 对称增强关闭时, 没什么阻止偏跨步 (主要用一条腿推)
+    # 导致偏转和不稳, 尤其在起飞时. 惩罚累积摆动时间不平衡 |L-R|/(L+R);
+    # 真实跨步的瞬时单脚摆动不对称是允许的.
     cfg.rewards["gait_symmetry"] = RewardTermCfg(
         func=microduck_mdp.gait_symmetry_penalty,
         weight=-1.0,
         params={"sensor_name": "feet_ground_contact"},
     )
-    # NOTE: a contact_frequency penalty was tried here to slow the cadence, but it
-    # penalises contact CHANGES — minimised by never lifting a foot (the swizzle),
-    # so it pushes toward exactly the gait we fought to leave. Reverted; the
-    # widened air-time window above is the safe cadence-slower (it forbids short
-    # swings without rewarding not-stepping).
-    # Encourage slight forward lean when pushing to counteract backward torque.
+    # 注意: 曾在此试过 contact_frequency 惩罚以放慢节奏, 但它惩罚接触变化
+    # — 通过永不抬脚 (swizzle) 来最小化, 所以它推向我们要离开的步态. 回退;
+    # 上方加宽的 air_time 窗口是安全的节奏放慢器 (它禁止短摆动而不奖励
+    # 不迈步).
+    # 鼓励推力时轻微前倾, 以抵消后向力矩.
     cfg.rewards["forward_lean"] = RewardTermCfg(
         func=microduck_mdp.forward_lean_reward,
         weight=1.5,
         params={"command_name": "twist", "target_pitch": 0.262, "std": 0.1},
     )
-    # Heading command DISABLED (straight-line focus), but we hold the heading so it
-    # doesn't drift: heading_hold rewards the yaw ANGLE staying near the spawn
-    # heading. Corrective (allows yaw to steer back) — unlike a yaw-RATE penalty,
-    # which froze the yaw and made drift WORSE (tried and reverted). Re-add real
-    # heading_tracking (turning) once the stride is solid.
+    # 航向指令禁用 (专注直线), 但我们保持航向不让它漂移: heading_hold
+    # 奖励偏航角保持接近出生航向. 修正性 (允许偏航转回) — 不同于偏航率
+    # 惩罚, 后者冻结偏航并让漂移更糟 (试过并回退). 跨步稳固后重新加回真实
+    # heading_tracking (转弯).
     cfg.rewards["heading_hold"] = RewardTermCfg(
         func=microduck_mdp.heading_hold_reward,
         weight=1.0,
         params={"std": 0.4, "asset_cfg": SceneEntityCfg("robot")},
     )
 
-    # === TERMINATIONS ===
+    # === 终止 ===
     cfg.terminations["nan_state"] = TerminationTermCfg(
         func=microduck_mdp.robot_state_is_nan,
         time_out=False,
     )
 
-    # === EVENTS ===
-    # BAM (mjlab_frictionloss branch) writes per-env dof_frictionloss/dof_damping
-    # every step; this no-op event registers those fields for per-world expansion.
+    # === 事件 ===
+    # BAM (mjlab_frictionloss 分支) 每步写入每环境的 dof_frictionloss/dof_damping;
+    # 这个 no-op 事件为按世界展开注册这些字段.
     cfg.events["expand_bam_friction_fields"] = EventTermCfg(
         func=microduck_mdp.expand_bam_friction_fields,
         mode="startup",
@@ -348,7 +326,7 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
         mode="reset",
     )
 
-    del cfg.events["foot_friction"]  # wheels roll; ground friction lives in the XML
+    del cfg.events["foot_friction"]  # 轮子滚动; 地面摩擦在 XML 中
 
     if ENABLE_VELOCITY_PUSHES:
         cfg.events["push_robot"] = EventTermCfg(
@@ -363,9 +341,9 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
 
     cfg.events["reset_base"].params["pose_range"]["z"] = (0.1335, 0.1435)
 
-    # Wheel-bearing friction DR: real bearings have a little drag; the XML keeps
-    # frictionloss=0 for trainability and the curriculum ramps it in. mjlab 1.3.0
-    # stock dr op (operation="abs" writes the value directly; non-accumulating).
+    # 轮轴承摩擦 DR: 真实轴承有一点阻力; XML 保持 frictionloss=0 以便训练,
+    # 课程逐步引入. mjlab 1.3.0 原生 dr 操作 (operation="abs" 直接写值;
+    # 非累积).
     if ENABLE_WHEEL_FRICTION_RANDOMIZATION:
         cfg.events["randomize_wheel_friction"] = EventTermCfg(
             func=dr.dof_frictionloss,
@@ -373,11 +351,11 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
             params={
                 "asset_cfg": SceneEntityCfg("robot", joint_names=(r"^passive_.*wheel",)),
                 "operation": "abs",
-                "ranges": (0.000, 0.000),  # ramped up by wheel_friction_curriculum
+                "ranges": (0.000, 0.000),  # 由 wheel_friction_curriculum 渐升
             },
         )
 
-    # ── DR matched to the velocity env's FIXED versions ───────────────────────
+    # ── DR 与 velocity 环境的 FIXED 版本对齐 ───────────────────────────────
     if ENABLE_COM_RANDOMIZATION:
         cfg.events["randomize_com"] = EventTermCfg(
             func=dr.body_ipos,
@@ -422,8 +400,8 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
         )
 
     if ENABLE_ARMATURE_RANDOMIZATION:
-        # Legs/head only — the wheel bearings' tiny armature is excluded (its DR
-        # is the frictionloss event above).
+        # 仅腿/头 — 轮轴承的微小 armature 被排除 (其 DR 是上方的
+        # frictionloss 事件).
         cfg.events["randomize_armature"] = EventTermCfg(
             func=dr.joint_armature,
             mode="reset",
@@ -434,10 +412,10 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
             },
         )
 
-    # === OBSERVATIONS (unified 61D layout) ===
+    # === 观测 (统一 61D 布局) ===
     del cfg.observations["actor"].terms["base_lin_vel"]
-    # 1.3.0 base template adds sensor-based foot_height + height_scan; the roller
-    # env has no terrain-height sensor.
+    # 1.3.0 基础模板添加基于传感器的 foot_height + height_scan; roller 环境
+    # 没有地形高度传感器.
     del cfg.observations["critic"].terms["foot_height"]
     del cfg.observations["actor"].terms["height_scan"]
     del cfg.observations["critic"].terms["height_scan"]
@@ -450,7 +428,7 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
     gravity_term_name = "projected_gravity"
     cfg.observations["actor"].terms[gravity_term_name] = deepcopy(cfg.observations["actor"].terms[gravity_term_name])
     cfg.observations["actor"].terms["base_ang_vel"] = deepcopy(cfg.observations["actor"].terms["base_ang_vel"])
-    # IMU delay 0-1 control steps (matches velocity: the real dxl IMU path is fast)
+    # IMU 延迟 0-1 控制步 (与 velocity 一致: 真实 dxl IMU 路径快)
     cfg.observations["actor"].terms["base_ang_vel"].delay_min_lag = 0
     cfg.observations["actor"].terms["base_ang_vel"].delay_max_lag = 1
     cfg.observations["actor"].terms["base_ang_vel"].delay_update_period = 64
@@ -458,13 +436,13 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
     cfg.observations["actor"].terms[gravity_term_name].delay_max_lag = 1
     cfg.observations["actor"].terms[gravity_term_name].delay_update_period = 64
 
-    # Observation noise — matched to the velocity env
+    # 观测噪声 — 与 velocity 环境对齐
     cfg.observations["actor"].terms["base_ang_vel"].noise = Unoise(n_min=-0.03, n_max=0.03)
     cfg.observations["actor"].terms[gravity_term_name].noise = Unoise(n_min=-0.01, n_max=0.01)
     cfg.observations["actor"].terms["joint_pos"].noise = Unoise(n_min=-0.001, n_max=0.001)
     cfg.observations["actor"].terms["joint_vel"].noise = Unoise(n_min=-0.25, n_max=0.25)
 
-    # IMU mounting-misalignment DR (obs-level, actor only — matches velocity)
+    # IMU 安装失准 DR (obs 层, 仅 actor — 与 velocity 一致)
     if ENABLE_IMU_ORIENTATION_RANDOMIZATION:
         av = cfg.observations["actor"].terms["base_ang_vel"]
         av.func = microduck_mdp.base_ang_vel_imu_misaligned
@@ -473,15 +451,14 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
         g.func = microduck_mdp.projected_gravity_imu_misaligned
         g.params = {"max_angle_deg": IMU_ORIENTATION_RANDOMIZATION_ANGLE}
 
-    # 1-ctrl-step lag on joint_vel (Dynamixel present_velocity moving average)
+    # joint_vel 上 1-ctrl-step 滞后 (Dynamixel present_velocity 滑动平均)
     cfg.observations["actor"].terms["joint_vel"] = deepcopy(cfg.observations["actor"].terms["joint_vel"])
     cfg.observations["actor"].terms["joint_vel"].delay_min_lag = 1
     cfg.observations["actor"].terms["joint_vel"].delay_max_lag = 1
     cfg.observations["actor"].terms["joint_vel"].delay_update_period = 0
 
-    # Exclude the passive wheel joints from joint_pos/vel obs (obs dim 14, matches
-    # the action space). Deepcopy per group so the encoder-bias `biased` flag
-    # below applies to the actor only.
+    # 从 joint_pos/vel obs 中排除被动轮关节 (obs 维 14, 匹配动作空间).
+    # 按组深拷贝, 使下方 encoder-bias `biased` 标志仅应用于 actor.
     passive_excluded = SceneEntityCfg("robot", joint_names=(r"^(?!passive_).*",))
     for grp in ("actor", "critic"):
         for term in ("joint_pos", "joint_vel"):
@@ -495,7 +472,7 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
     else:
         cfg.events.pop("encoder_bias", None)
 
-    # Privileged wheel speeds for the critic (4 wheels in the new model).
+    # critic 的特权轮速 (新模型 4 个轮).
     wheel_cfg = SceneEntityCfg("robot", joint_names=(r"^passive_.*wheel",))
     cfg.observations["critic"].terms["wheel_vel"] = ObservationTermCfg(
         func=mdp.joint_vel_rel,
@@ -503,8 +480,8 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
         params={"asset_cfg": wheel_cfg},
     )
 
-    # Command obs parity with the 61D family layout: head/body slots zero-padded
-    # (the roller task drives heading through the twist slot instead).
+    # 指令 obs 与 61D 家族布局对齐: head/body 槽零填充 (roller 任务通过
+    # twist 槽驱动航向).
     for group in ("actor", "critic"):
         cfg.observations[group].terms["head_command"] = ObservationTermCfg(
             func=microduck_mdp.zero_command_padding,
@@ -515,17 +492,17 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
             params={"dim": 6},
         )
 
-    # === COMMANDS ===
+    # === 指令 ===
     command: UniformVelocityCommandCfg = cfg.commands["twist"]
     command.rel_standing_envs = 0.0
     command.rel_heading_envs = 0.0
-    command.heading_command = False  # RelativeHeadingVelocityCommand handles heading internally
-    command.ranges.heading = None  # must be None when heading_command=False
-    # cmd_x semantics: 0=coast, >0=push to accelerate, <0=brake to stop
+    command.heading_command = False  # RelativeHeadingVelocityCommand 内部处理航向
+    command.ranges.heading = None  # heading_command=False 时必须为 None
+    # cmd_x 语义: 0=滑行, >0=推加速, <0=刹车停止
     command.ranges.lin_vel_x = (-0.5, 0.6)
     command.ranges.lin_vel_y = (0.0, 0.0)
-    # ang_vel_z range is the clip limit for cmd[2] = heading error (rad).
-    # Set to 0 → cmd[2] is always 0 → no turning demand (straight-line focus).
+    # ang_vel_z 范围是 cmd[2] = 航向误差 (rad) 的裁剪限位.
+    # 设为 0 → cmd[2] 恒为 0 → 无转弯需求 (专注直线).
     command.ranges.ang_vel_z = (0.0, 0.0)
     command.viz.z_offset = 0.5
     cfg.commands["twist"] = microduck_mdp.RelativeHeadingVelocityCommandCfg(**vars(command))
@@ -533,15 +510,13 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
     cfg.scene.terrain.terrain_type = "plane"
     cfg.scene.terrain.terrain_generator = None
 
-    # === CURRICULUM ===
+    # === 课程 ===
     del cfg.curriculum["terrain_levels"]
     del cfg.curriculum["command_vel"]
 
-    # action_rate penalty raised (-0.5/-0.8/-1.0 -> -1.0/-1.5/-2.0) for a CALMER
-    # gait: this is the main "less movement" lever — it penalises fast/large action
-    # changes, so motions become smaller, smoother AND less frequent (rapid
-    # alternation = big action change = penalised). Dial back if it gets sluggish
-    # / can't push enough to move.
+    # action_rate 惩罚提高 (-0.5/-0.8/-1.0 -> -1.0/-1.5/-2.0) 以获得更平稳
+    # 步态: 这是主要的 "少动" 杠杆 — 它惩罚快/大动作变化, 所以动作变小,
+    # 变平滑且变少 (快速交替 = 大动作变化 = 受惩罚). 呆滞/推力不足时调低.
     cfg.curriculum["action_rate_weight"] = CurriculumTermCfg(
         func=microduck_mdp.reward_weight,
         params={
@@ -555,11 +530,10 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
     )
 
     if ENABLE_WHEEL_FRICTION_RANDOMIZATION:
-        # Delayed + softened ramp: the previous schedule started adding bearing
-        # drag at iter 750 — right when wheel_speed peaked — and reached 0.003,
-        # which (with the heading ramp below) pushed the policy off skating into
-        # a heading-farming local optimum. Keep the wheels free until skating is
-        # robust, then add gentle, realistic drag.
+        # 延迟 + 软化的渐升: 之前的计划在 iter 750 — wheel_speed 峰值时 —
+        # 开始加轴承阻力, 并达到 0.003, 这 (与下方的航向渐升一起) 把 policy
+        # 推出滑行进入航向刷分的局部最优. 保持轮自由直到滑行稳健, 然后加
+        # 温和、真实的阻力.
         cfg.curriculum["wheel_friction"] = CurriculumTermCfg(
             func=microduck_mdp.wheel_friction_curriculum,
             params={
@@ -573,12 +547,11 @@ def make_microduck_velocity_rollers_env_cfg(play: bool = False) -> ManagerBasedR
             },
         )
 
-    # (heading_tracking_weight curriculum removed — heading is disabled while we
-    # focus on straight-line skating. Re-add together with the reward above.)
+    # (heading_tracking_weight 课程移除 — 我们专注直线滑行时航向被禁用.
+    # 与上方的奖励一起重新加回.)
 
-    # CoM randomization curricula — velocity's ramp, capped lower for the
-    # balance-sensitive skating task (audit lesson: ±30 mm forced a nervous
-    # gait on the walker; skates are even less forgiving).
+    # CoM 随机化课程 — velocity 的渐升, 对平衡敏感的滑行任务上限更低
+    # (审计教训: ±30 mm 在 walker 上强制紧张步态; 轮滑更不宽容).
     if ENABLE_COM_RANDOMIZATION:
         cfg.curriculum["com_range"] = CurriculumTermCfg(
             func=microduck_mdp.com_range_curriculum,
@@ -611,7 +584,7 @@ MicroduckRollersRlCfg = RslRlOnPolicyRunnerCfg(
     actor=RslRlModelCfg(
         hidden_dims=(512, 256, 128),
         activation="elu",
-        obs_normalization=True,  # matches the family; normalizer baked into ONNX by export.py
+        obs_normalization=True,  # 与家族一致; 归一化器由 export.py 烤进 ONNX
         distribution_cfg={
             "class_name": "GaussianDistribution",
             "init_std": 1.0,
@@ -627,7 +600,7 @@ MicroduckRollersRlCfg = RslRlOnPolicyRunnerCfg(
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
         clip_param=0.2,
-        entropy_coef=0.03,  # roller-specific: higher exploration than the walk envs
+        entropy_coef=0.03,  # roller 专有: 比 walk 环境更高的探索
         num_learning_epochs=5,
         num_mini_batches=4,
         learning_rate=1.0e-3,
