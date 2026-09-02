@@ -1,23 +1,20 @@
-"""XL330 testbench entity configuration for sim2real validation."""
+"""用于 sim2real 验证的 XL330 测试台实体配置."""
 
-import os
 from pathlib import Path
 
 import mujoco
+from bam.mjlab import BamActuatorCfg
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 
-from bam.mjlab import BamActuatorCfg
-
-
-_TESTBENCH_DIR: Path = Path(os.path.dirname(__file__)) / "xl330_test_bench"
-# Use the robot-only XML (no floor / no lights): mjlab's TerrainImporterCfg
-# adds its own ground plane, so scene.xml would give a duplicated floor.
+_TESTBENCH_DIR: Path = Path(__file__).parent / "xl330_test_bench"
+# 使用仅机器人的 XML (无地面 / 无灯光): mjlab 的 TerrainImporterCfg
+# 会自行添加地面, 所以 scene.xml 会造成重复地面.
 TESTBENCH_XML: Path = _TESTBENCH_DIR / "xl330_test_bench.xml"
 
 assert TESTBENCH_XML.exists(), f"XML not found: {TESTBENCH_XML}"
 
 
-# Real-device payload mass (120 g)
+# 真机负载质量 (120 g)
 TESTBENCH_ARM_MASS: float = 0.12
 
 
@@ -33,6 +30,7 @@ def _set_arm_mass(spec: mujoco.MjSpec, mass: float) -> None:
 
 
 def get_testbench_spec() -> mujoco.MjSpec:
+    """加载测试台 MJCF 并应用真实机械臂负载质量."""
     spec = mujoco.MjSpec.from_file(str(TESTBENCH_XML))
     _set_arm_mass(spec, TESTBENCH_ARM_MASS)
     return spec
@@ -44,7 +42,7 @@ HOME_FRAME = EntityCfg.InitialStateCfg(
 )
 
 
-# Use the BAM M6 actuator model (matches the real XL330 on the test bench).
+# 使用 BAM M6 执行器模型 (匹配测试台上的真实 XL330).
 testbench_actuators = BamActuatorCfg(
     motor_name="xl330",
     model="m6",

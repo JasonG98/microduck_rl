@@ -1,31 +1,25 @@
-"""Microduck roller standup — se relever sur rollers.
+"""Microduck 滚轮起立 — 在滚轮上自行起立.
 
-Policy DÉDIÉE épisodique : le robot démarre au sol (à plat ventre, à plat dos) ou
-déjà debout, et doit se remettre debout sur ses rollers puis TENIR la station.
-Portage de la recette `standup` (canard marcheur) vers le modèle rollers.
+专用 episodic policy: 机器人从地面启动 (趴卧 / 仰卧) 或已站立, 需在滚轮上
+自行起立并保持站立. 将 `standup` (步履鸭) 的配方移植到 rollers 模型.
 
-Dérive de l'env roller (`make_microduck_velocity_rollers_env_cfg`) → hérite tel
-quel le robot rollers, les capteurs, toute la DR et l'observation 61D, donc
-interchangeable au runtime (--new-cmd-obs). C'est le pattern de roller_slope.
+派生自 roller env (`make_microduck_velocity_rollers_env_cfg`) → 原样继承滚轮
+机器人, 传感器, 全部 DR 和 61D 观测, 因此可在 runtime 互换 (--new-cmd-obs).
+与 roller_slope 的模式一致.
 
-Deux différences structurelles avec `standup` :
-  - les roues passives sont INTERCALÉES dans l'ordre des joints → indices
-    remappés (_LEG_JOINTS ci-dessous), verrouillés par
-    tests/test_roller_standup_cfg.py ;
-  - pas de commande head_pose : les slots head/body restent zero-paddés
-    (convention de la famille roller) et la tête est tenue droite par
-    neck_joint_pos_l2, qui résout par NOM.
+与 `standup` 的两个结构性差异:
+  - 被动轮子在关节顺序中是 INTERLEAVED → 索引需重映射
+    (下方 _LEG_JOINTS), 由 tests/test_roller_standup_cfg.py 锁定;
+  - 无 head_pose 指令: head/body 槽位保持零填充 (滚轮家族的约定), 头部
+    由 neck_joint_pos_l2 按名解析保持正立.
 
-La pièce nouvelle est le curriculum de friction de roulement, INVERSÉ (roues
-freinées → libres) : les roues roulent, donc il n'y a aucune adhérence pour
-pousser sur le sol. On bootstrappe avec des roues quasi bloquées puis on rampe
-vers la vraie valeur. Si `standing_composite` s'écroule à un palier, le geste
-« pieds adhérents » ne transfère pas et il faudra guider une technique de
-patineur (appui genou, un patin à la fois).
+新增的核心是滚动摩擦课程, 反向 (轮子制动 → 自由): 轮子会滚, 因此无任何
+纵向抓地力可推地面. 用近乎锁死的轮子做引导, 然后逐步 ramp 到真实滚动
+物理. 若 `standing_composite` 在某个阶段崩溃, "脚踏式" 动作无法迁移到
+自由轮, 需要引入滑冰者技巧 (膝撑, 一次一只滑板).
 
-Déploiement visé : en `--standing` face à la policy roller en `--walking`, avec
-la bascule automatique sur la magnitude de la commande de vitesse
-(infer_policy.py:262, seuil 0.05) ; le slot twist y est laissé à zéro
+目标部署: 在 `--standing` 时面对 `--walking` 的 roller policy, 由速度指令
+幅值自动切换 (infer_policy.py:262, 阈值 0.05); twist 槽位保持为零
 (infer_policy.py:239).
 """
 
@@ -47,38 +41,34 @@ from mjlab_microduck.tasks.microduck_velocity_rollers_env_cfg import (
 )
 from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg
 
-# ── Hauteurs de tronc (m) ─────────────────────────────────────────────────────
-# Mesurées par cinématique exacte (minimum des sommets de maillage des géoms
-# collidantes, pose STAND, tronc ramené au contact) sur scene_rollers.xml :
-# debout 0.1407, repos à plat ventre 0.0752, repos à plat dos 0.0475.
-# Contrôle : le modèle SANS roues donne 0.1172 en cinématique contre STAND_Z=0.115
-# mesuré sous charge par standup → ~2 mm d'affaissement, appliqué ici aussi.
-# 0.138 tombe dans le reset_base z (0.1335–0.1435) déjà utilisé par l'env roller.
+# ── trunk 高度 (m) ─────────────────────────────────────────────────────
+# 通过精确运动学测量 (碰撞 geom 网格顶点的最小值, STAND 姿态, trunk 贴地) 在
+# scene_rollers.xml 上测得: 站立 0.1407, 趴卧 0.0752, 仰卧 0.0475.
+# 对照: 无轮子模型运动学测得 0.1172, 而 standup 负载下测得 STAND_Z=0.115 →
+# ~2 mm 下沉, 此处同样适用.
+# 0.138 落在 roller env 已使用的 reset_base z 范围 (0.1335–0.1435) 内.
 ROLLER_STAND_Z = 0.138
 ROLLER_PRONE_Z = 0.075
 
-EPISODE_LENGTH_S  = 6.0   # monter + stabiliser, comme standup
+EPISODE_LENGTH_S = 6.0  # 起立 + 稳定, 同 standup
 NUM_STEPS_PER_ENV = 24
 
-# ── Override de play : forcer la proportion de départs SUR LE DOS ─────────────
-# Au play, l'env est reconstruit à neuf : common_step_counter repart à 0, donc le
-# curriculum ground_state_mix applique son palier 0, où face_up_prob = 0. On ne
-# voit donc JAMAIS de départ sur le dos au play — or c'est le cas le plus dur,
-# celui qu'on veut inspecter à l'œil. Cette variable le force.
-#   STANDUP_PLAY_FACE_UP=1.0  -> 100 % de départs sur le dos
-#   STANDUP_PLAY_FACE_UP=0.4  -> le mélange du dernier palier du curriculum
-#   non définie / "none" / "random" -> comportement par défaut (palier 0)
-# N'a d'effet QUE sur play=True. Même motif que SLOPE_PLAY_DIFFICULTY dans
-# roller_slope.
+# ── play 覆盖: 强制仰卧启动比例 ───────────────────────────────────────
+# play 时 env 重新构建: common_step_counter 归零, ground_state_mix 课程应用
+# 阶段 0, 其中 face_up_prob = 0. 因此 play 时从不出现仰卧启动 — 而这恰恰是
+# 最难的情形, 也是想人工检查的. 该变量强制其出现.
+#   STANDUP_PLAY_FACE_UP=1.0  -> 100% 仰卧启动
+#   STANDUP_PLAY_FACE_UP=0.4  -> 课程最后阶段的混合比例
+#   未定义 / "none" / "random" -> 默认行为 (阶段 0)
+# 仅在 play=True 时生效. 与 roller_slope 的 SLOPE_PLAY_DIFFICULTY 同理.
 PLAY_FACE_UP = None
-# Rapport ventre:debout du DERNIER palier du curriculum (0.40 / 0.20 = 2:1). Le
-# reste (1 - face_up) est réparti dans ce rapport, si bien que 0.4 reproduit
-# exactement le mélange de fin d'entraînement.
+# 课程最后阶段的 趴卧:站立 比例 (0.40 / 0.20 = 2:1). 余下 (1 - face_up) 按
+# 此比例分配, 使 0.4 可精确复现训练末期的混合.
 _PLAY_FACE_DOWN_SHARE = 2.0 / 3.0
 
 
 def _resolve_play_face_up():
-    """Proportion de départs sur le dos au play : env STANDUP_PLAY_FACE_UP sinon la constante."""
+    """play 时仰卧启动比例: 优先读 STANDUP_PLAY_FACE_UP 环境变量, 否则用常量."""
     raw = os.environ.get("STANDUP_PLAY_FACE_UP")
     if raw is None:
         return PLAY_FACE_UP
@@ -88,33 +78,33 @@ def _resolve_play_face_up():
     try:
         return max(0.0, min(1.0, float(raw)))
     except ValueError:
-        print(f"[roller_standup] STANDUP_PLAY_FACE_UP='{raw}' invalide -> défaut {PLAY_FACE_UP}")
+        print(f"[roller_standup] STANDUP_PLAY_FACE_UP='{raw}' 无效 -> 默认 {PLAY_FACE_UP}")
         return PLAY_FACE_UP
 
-# ── Indices de joints — les roues passives sont INTERCALÉES ───────────────────
-# Ordre réel du modèle rollers (18 joints après le free-joint), vérifié dans
-# MuJoCo via get_walk_rollers_spec().compile() :
+
+# ── 关节索引 — 被动轮子是 INTERLEAVED ───────────────────────────────
+# rollers 模型的真实顺序 (free-joint 后 18 个关节), 在 MuJoCo 中通过
+# get_walk_rollers_spec().compile() 验证:
 #   0-4   left_hip_yaw, left_hip_roll, left_hip_pitch, left_knee, left_ankle
 #   5-6   passive_LF_wheel, passive_LR_wheel
 #   7-10  neck_pitch, head_pitch, head_yaw, head_roll
 #   11-15 right_hip_yaw, right_hip_roll, right_hip_pitch, right_knee, right_ankle
 #   16-17 passive_RF_wheel, passive_RR_wheel
-# Le standup utilise [0-4, 9-13] / [5-8] : ce sont les indices du modèle SANS
-# roues, ils ne valent PAS ici. Verrouillé par tests/test_roller_standup_cfg.py.
+# standup 使用 [0-4, 9-13] / [5-8]: 这些是无轮子模型的索引, 在此处无效.
+# 由 tests/test_roller_standup_cfg.py 锁定.
 #
-# Seul _LEG_JOINTS est consommé (par les récompenses de pose). _NECK_JOINTS et
-# _WHEEL_JOINTS servent à la documentation et au test d'indices : le cou est
-# résolu par NOM (neck_joint_pos_l2 appelle find_joints(r".*(neck|head).*") à
-# chaque pas) et les roues par la regex ^passive_.*.
-_LEG_JOINTS   = [0, 1, 2, 3, 4, 11, 12, 13, 14, 15]
-_NECK_JOINTS  = [7, 8, 9, 10]
+# 仅 _LEG_JOINTS 被消费 (姿态奖励使用). _NECK_JOINTS 和 _WHEEL_JOINTS 用于
+# 文档与索引测试: 颈部按名解析 (neck_joint_pos_l2 每步调用
+# find_joints(r".*(neck|head).*"), 轮子用 ^passive_.* 正则).
+_LEG_JOINTS = [0, 1, 2, 3, 4, 11, 12, 13, 14, 15]
+_NECK_JOINTS = [7, 8, 9, 10]
 _WHEEL_JOINTS = [5, 6, 16, 17]
 
-# Récompenses de PATINAGE de l'env roller : aucun sens quand on est par terre.
-# feet_flat : les lames ne sont PAS à plat pendant la montée → combattrait le geste.
-# hip_roll_neutral : se relever demande d'écarter les jambes.
-# pose / com_height_target : remplacés par les cibles pose/hauteur du relevé.
-# upright (gaussienne de base) : remplacée par upright_linear + upright_sharp.
+# roller env 的滑行奖励: 在地上时无意义.
+# feet_flat: 起立期间刀片并非平放 → 会对抗动作.
+# hip_roll_neutral: 起立需要张开双腿.
+# pose / com_height_target: 由起立的姿态/高度目标替代.
+# upright (基础高斯): 由 upright_linear + upright_sharp 替代.
 _SKATING_REWARDS = (
     "wheel_speed",
     "braking",
@@ -133,25 +123,24 @@ _SKATING_REWARDS = (
 
 
 def make_microduck_roller_standup_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    """Env « se relever sur rollers » : départ au sol, cible = debout sur roues."""
+    """滚轮上的起立 env: 地面启动, 目标 = 在轮子上站立."""
     cfg = make_microduck_velocity_rollers_env_cfg(play=play)
 
     cfg.episode_length_s = EPISODE_LENGTH_S
 
-    # ── Récompenses de patinage retirées ─────────────────────────────────────
+    # ── 移除滑行奖励 ─────────────────────────────────────────────────
     for name in _SKATING_REWARDS:
         cfg.rewards.pop(name, None)
 
-    # ── Commande : slot twist neutralisé (≈ 0) ───────────────────────────────
-    # L'env roller installe un RelativeHeadingVelocityCommandCfg (cmd[2] = erreur
-    # de cap calculée en interne). Ici on ne pilote rien : on repasse au
-    # command-only neutralisé, comme standup. Les slots head_pose (4) et
-    # body_pose (6) restent zero-paddés → parité d'obs 61D préservée.
+    # ── 指令: twist 槽位中和 (≈ 0) ───────────────────────────────────
+    # roller env 装配 RelativeHeadingVelocityCommandCfg (cmd[2] = 内部计算的
+    # 航向误差). 此处无需操控: 回到 standup 那样的 command-only 中和. head_pose
+    # (4) 和 body_pose (6) 槽位保持零填充 → 61D obs 对等性保留.
     command = cfg.commands["twist"]
     command.rel_standing_envs = 0.0
-    command.rel_heading_envs  = 0.0
-    command.heading_command   = False
-    command.ranges.heading    = None
+    command.rel_heading_envs = 0.0
+    command.heading_command = False
+    command.ranges.heading = None
     command.resampling_time_range = (EPISODE_LENGTH_S, EPISODE_LENGTH_S * 2)
     command.debug_vis = False
     command.ranges.lin_vel_x = (-0.01, 0.01)
@@ -159,22 +148,20 @@ def make_microduck_roller_standup_env_cfg(play: bool = False) -> ManagerBasedRlE
     command.ranges.ang_vel_z = (-0.05, 0.05)
     cfg.commands["twist"] = microduck_mdp.VelocityCommandCommandOnlyCfg(**vars(command))
 
-    # ── Robustesse numérique (même choix que roller_slope) ───────────────────
-    # Un contact rare (~1/25M pas) fait diverger le free-joint en NaN : on
-    # assainit l'obs (→ 0) pour ne pas tuer l'entraînement, l'env fautif se reset
-    # au pas suivant.
+    # ── 数值鲁棒性 (同 roller_slope 的选择) ───────────────────────────
+    # 罕见接触 (~1/25M 步) 会使 free-joint 发散为 NaN: 清理 obs (→ 0) 避免终止
+    # 训练, 故障 env 在下一步 reset.
     for grp in ("actor", "critic"):
         cfg.observations[grp].nan_policy = "sanitize"
 
-    # ── Récompenses de relevé — transplant du standup, remappé ───────────────
-    # Les poids viennent des itérations documentées dans
-    # microduck_standup_env_cfg.py : ne les retoucher qu'avec une raison. Seuls
-    # les indices de joints et les deux hauteurs changent ici.
-    # NB : un SceneEntityCfg NEUF par terme — mjlab les résout et les mute en
-    # place, un objet partagé donne des indices périmés.
+    # ── 起立奖励 — 从 standup 移植, 重映射 ──────────────────────────
+    # 权重来自 microduck_standup_env_cfg.py 中记录的迭代过程: 非有理由不调整.
+    # 此处仅关节索引和两个高度值不同.
+    # 注意: 每个术语用 NEW SceneEntityCfg — mjlab 会就地解析并修改, 共享对象
+    # 会给出过时索引.
 
-    # Pose cible = HOME (target_overrides=None), JAMBES seulement : le cou et la
-    # tête sont tenus par neck_joint_pos_l2 (hérité), qui résout par NOM.
+    # 目标姿态 = HOME (target_overrides=None), 仅腿部: 颈和头由继承的
+    # neck_joint_pos_l2 按名解析保持.
     cfg.rewards["pose_stand_legs"] = RewardTermCfg(
         func=microduck_mdp.pose_target_match,
         weight=8.0,
@@ -184,7 +171,7 @@ def make_microduck_roller_standup_env_cfg(play: bool = False) -> ManagerBasedRlE
             "target_overrides": None,
         },
     )
-    # Bootstrap L1 : gradient constant même loin de HOME (la gaussienne sature).
+    # Bootstrap L1: 远离 HOME 时高斯饱和, 提供恒定梯度.
     cfg.rewards["pose_stand_l1"] = RewardTermCfg(
         func=microduck_mdp.pose_l1_penalty,
         weight=5.0,
@@ -194,10 +181,9 @@ def make_microduck_roller_standup_env_cfg(play: bool = False) -> ManagerBasedRlE
         },
     )
 
-    # Hauteur en trois couches : gaussienne large (tire depuis le sol),
-    # gaussienne étroite (force les derniers cm, là où la large est saturée),
-    # et L1 fort qui rend « rester par terre » net NÉGATIF — sans lui, la policy
-    # se contente de l'optimum paresseux « immobile au sol ».
+    # 高度分三层: 宽高斯 (从地面拉起), 窄高斯 (在宽高斯饱和时强迫最后几厘米),
+    # 以及强 L1 使 "留在地面" 净 NÉGATIF — 没有它, policy 会满足于 "地面静止"
+    # 的懒惰最优.
     cfg.rewards["height_stand"] = RewardTermCfg(
         func=microduck_mdp.height_target_gaussian,
         weight=4.0,
@@ -225,10 +211,8 @@ def make_microduck_roller_standup_env_cfg(play: bool = False) -> ManagerBasedRlE
         },
     )
 
-    # Paye le MOUVEMENT de montée, pas seulement la destination : sans ça,
-    # « rester assis en collectant la pose partielle » domine. La coupure est
-    # 10 mm AU-DESSUS de la cible, sinon la policy se gare à l'altitude de
-    # coupure et ne finit pas la montée.
+    # 奖励上升的 MOVEMENT, 不只是终点: 没有它, "坐着收部分姿态奖励" 占优.
+    # 截断高度在目标之上 10 mm, 否则 policy 会停在截断高度, 不完成起立.
     cfg.rewards["com_upward_velocity"] = RewardTermCfg(
         func=microduck_mdp.com_upward_velocity,
         weight=3.0,
@@ -237,34 +221,28 @@ def make_microduck_roller_standup_env_cfg(play: bool = False) -> ManagerBasedRlE
             "max_height": ROLLER_STAND_Z + 0.010,
         },
     )
-    # Montée douce : pénalise |a_z|. Compatible avec com_upward_velocity — une
-    # vitesse verticale constante collecte l'une ET a a_z = 0 → les deux
-    # pressions sélectionnent ensemble une montée lisse à vitesse constante.
+    # 柔和上升: 惩罚 |a_z|. 与 com_upward_velocity 兼容 — 恒定垂直速度同时
+    # 拿这一项且 a_z = 0 → 两项压力共同选择匀速平滑上升.
     #
-    # ⚠️ POIDS POSITIF, et ce n'est pas une faute de frappe. mdp.py mélange deux
-    # conventions de signe : trunk_vertical_accel_penalty renvoie déjà -|a_z|
-    # (mdp.py:2171), comme height_l1_penalty et pose_l1_penalty — qui sont d'ailleurs
-    # employées ici avec des poids +30 et +5. Le -0.02 hérité du standup formait donc
-    # un double négatif et RÉCOMPENSAIT l'accélération verticale : mesuré à
-    # Episode_Reward/gentle_rise = +0.0118 (seul terme de pénalité loggé positif) sur
-    # le run vweolw91. C'est la cause du « très violent », et elle explique aussi les
-    # tentatives d'amortissement infructueuses documentées dans le standup, qui
-    # combattaient un terme poussant activement dans l'autre sens.
+    # ⚠️ 权重为正, 不是笔误. mdp.py 混用两种符号约定:
+    # trunk_vertical_accel_penalty 已返回 -|a_z| (mdp.py:2171), 同
+    # height_l1_penalty 和 pose_l1_penalty — 后者此处也以 +30 和 +5 的正权重
+    # 使用. 继承自 standup 的 -0.02 因此是双重负号, 实际 RÉCOMPENSait 垂直
+    # 加速度: 在 vweolw91 run 上测得 Episode_Reward/gentle_rise = +0.0118
+    # (唯一日志为正的惩罚项). 这是 "非常暴力" 的原因, 也解释了 standup 中
+    # 记录的那些失败阻尼尝试 — 它们在对抗一个主动反向推动的项.
     #
-    # On garde la magnitude 0.02 (celle voulue à l'origine) DÉLIBÉRÉMENT petite :
-    # |a_z| est forcément élevé pendant un retournement depuis le dos, donc un gros
-    # poids ici serait un bloqueur de mouvement. L'amortissement réel est porté par
-    # joint_torque_rate_l2, qui pénalise la VARIATION de couple et pas le mouvement.
+    # 幅度保持 0.02 (原本就是想要的值) 故意取小: 从仰卧翻转时 |a_z| 必然高,
+    # 此处大权重会成为动作阻断. 真正的阻尼由 joint_torque_rate_l2 承担, 它
+    # 惩罚扭矩的 VARIATION 而非动作本身.
     cfg.rewards["gentle_rise"] = RewardTermCfg(
         func=microduck_mdp.trunk_vertical_accel_penalty,
         weight=+0.02,
         params={"asset_cfg": SceneEntityCfg("robot", body_names=("trunk_base",))},
     )
 
-    # Tronc vertical en deux couches : cos(tilt) a un fort gradient quand on est
-    # couché mais s'essouffle près de la verticale ; la gaussienne serrée gatée
-    # en hauteur prend le relais et tue le penché-arrière (mode d'échec du
-    # standup : basculer en arrière en tendant les jambes).
+    # trunk 垂直分两层: 躺平时 cos(tilt) 梯度大但接近垂直时变弱; 高度门控的
+    # 窄高斯接管, 抑制后倾 (standup 的失败模式: 伸直腿向后翻).
     cfg.rewards["upright_linear"] = RewardTermCfg(
         func=microduck_mdp.body_upright_linear,
         weight=6.0,
@@ -281,11 +259,9 @@ def make_microduck_roller_standup_env_cfg(play: bool = False) -> ManagerBasedRlE
         },
     )
 
-    # Score MULTIPLICATIF hauteur × verticalité × pose : comme les facteurs se
-    # multiplient, être bon sur 2 critères sur 3 ne rapporte rien → casse les
-    # compromis « penché à la bonne hauteur » que les récompenses additives
-    # laissent passer. Stds volontairement LARGES pour rester visible pendant la
-    # montée (des stds serrées donnaient un score ~5e-5, donc zéro gradient).
+    # 乘性分数 高度 × 垂直度 × 姿态: 因子相乘, 三项中只做好两项无收益 →
+    # 打破加性奖励允许的 "正确高度但倾斜" 妥协. std 故意取 LARGES 使起立
+    # 期间可见 (过窄的 std 给出 ~5e-5 分, 即零梯度).
     cfg.rewards["standing_composite"] = RewardTermCfg(
         func=microduck_mdp.standing_composite_score,
         weight=15.0,
@@ -300,159 +276,161 @@ def make_microduck_roller_standup_env_cfg(play: bool = False) -> ManagerBasedRlE
         },
     )
 
-    # Anti-jitter : pénalise la VARIATION de couple, pas son amplitude ni la
-    # rotation du tronc → amortit la tremblote sans bloquer le retournement.
-    # Le standup l'a identifié comme le seul amortisseur qui ne tue pas le
-    # relevé depuis le dos, donc c'est LE levier sûr à remonter.
+    # 抗抖动: 惩罚扭矩 VARIATION, 而非其幅度或 trunk 旋转 → 阻尼抖动而不
+    # 阻断翻转. standup 确认这是唯一不杀仰卧起立的阻尼项, 因此是可放心调高的
+    # 杠杆.
     #
-    # -2e-3 (valeur héritée du standup) ne contribuait que -0.0002/pas face à
-    # ~+41.6 de récompense de tâche saturée à 95-99 % — soit rien du tout. Tous
-    # amortisseurs confondus le rapport était de ~35:1 en faveur de la tâche, donc
-    # aucune raison d'être doux. Mesuré sur le run vweolw91 à l'itération 7500.
+    # -2e-3 (standup 继承值) 在饱和 95-99% 任务奖励 ~+41.6 面前仅贡献
+    # -0.0002/步 — 即毫无作用. 所有阻尼合计与任务之比约 35:1, 完全没理由
+    # 温和. 在 vweolw91 run 第 7500 iter 测得.
     #
-    # Recalibrage : la valeur brute de |Δτ|² vaut ~0.1 à convergence, donc
-    # contribution ≈ 0.1 × |poids|. Mesuré à -0.255/pas avec un poids -2.0 (run
-    # d8rnko6p) — donc PAS la cause du gel, mais on redescend à -0.2 pour dégager
-    # le budget d'amortissement le temps d'isoler l'effet du seul bug de signe.
-    # Si c'est encore violent, monter CE terme (formule ci-dessus) plutôt que
-    # body_ang_vel ou action_rate, qui sont des bloqueurs de mouvement et gelaient
-    # le relevé depuis le dos.
+    # 重标定: 收敛时 |Δτ|² 原始值 ~0.1, 故贡献 ≈ 0.1 × |权重|. 在权重 -2.0
+    # (run d8rnko6p) 时测得 -0.255/步 — 因此并非冻结的元凶, 但仍下调至 -0.2
+    # 以腾出阻尼预算, 单独隔离符号 bug 的影响. 若仍过暴力, 调高此项 (按上
+    # 述公式) 而非 body_ang_vel 或 action_rate, 它们是动作阻断, 会冻结仰卧
+    # 起立.
     cfg.rewards["joint_torque_rate_l2"] = RewardTermCfg(
         func=microduck_mdp.joint_torque_rate_l2,
         weight=-0.2,
     )
 
-    # PAS de pénalité d'impact tête. Essayée avec les valeurs de velstand
-    # (body_impact_cost, sous-arbre `neck`, poids -1.0, seuil 2.0) : la policy a
-    # convergé vers rester couchée, INERTE. Mesuré (run d8rnko6p) :
-    # head_impact_penalty -1.01/pas, le plus gros terme négatif du tableau, pendant
-    # que standing_composite s'effondrait de +14.3 à +3.3.
+    # 不加头部冲击惩罚. 用 velstand 的值尝试过 (body_impact_cost, `neck`
+    # 子树, 权重 -1.0, 阈值 2.0): policy 收敛到躺平不动. 实测 (run d8rnko6p):
+    # head_impact_penalty -1.01/步, 表中最大负项, 同时 standing_composite
+    # 从 +14.3 崩到 +3.3.
     #
-    # L'erreur de raisonnement était de croire qu'une pénalité « ciblée » ne bride
-    # pas le mouvement. Faux ici : pour se relever du dos, ce robot PIVOTE sur sa
-    # tête et ses épaules. La tête est le point d'appui du retournement, pas un
-    # dégât collatéral — la pénaliser bloque le seul mécanisme disponible, et le
-    # dos était déjà le cas qui échouait.
+    # 推理错误在于认为 "定向" 惩罚不会限制动作. 此处错误: 从仰卧起立时,
+    # 此机器人以头和肩为支点 PIVOTE. 头是翻转的支点, 不是附带伤害 — 惩罚它
+    # 即阻断唯一可用机制, 而仰卧本就是失败的 case.
     #
-    # Hypothèse en cours de test : taper la tête était un SYMPTÔME de la violence
-    # (le bug de signe de gentle_rise payait la brutalité, et une montée brutale
-    # finit sur la tête), pas un défaut séparé. Si le slam revient une fois le signe
-    # corrigé, la reprise doit être une pénalité GATÉE EN HAUTEUR — comme
-    # upright_sharp l'est — pour épargner la phase de retournement au sol.
+    # 正在测试的假设: 撞头是暴力的 SYMPTÔME (gentle_rise 的符号 bug 在奖励
+    # 暴力, 暴力起立会以头着地结束), 而非独立缺陷. 若符号修正后撞头重现,
+    # 应使用高度门控的惩罚 — 如 upright_sharp 那样 — 以放过地面翻转阶段.
     #
-    # ⚠️ Attention à l'optimum paresseux qui rend ce gel possible : pose_stand_legs
-    # restait à +7.72 sur 8 alors que le robot était allongé (jambes à HOME en
-    # position couchée → récompense encaissée quasi gratuitement). C'est
-    # height_stand_l1 (poids +30) qui doit rendre « rester au sol » net négatif.
+    # ⚠️ 注意使此冻结成为可能的懒惰最优: 机器人躺平时 pose_stand_legs
+    # 仍达 +7.72/8 (躺姿下腿在 HOME 位置 → 几乎免费拿到的奖励). 应由
+    # height_stand_l1 (权重 +30) 让 "留在地面" 净负.
 
-    # ── Départ AU SOL : à plat ventre / à plat dos / déjà debout ─────────────
-    # Ajouté en DERNIER dans cfg.events : l'ordre d'exécution suit l'ordre
-    # d'insertion, et ce terme doit écraser la pose posée par reset_base /
-    # reset_robot_joints.
-    # Le bucket « déjà debout » n'est pas décoratif : sans lui la policy apprend
-    # à monter mais pas à TENIR, et elle retombe juste après s'être relevée.
-    # Pas de bucket « assis » → aucun sitting_joint_overrides à remapper (ceux du
-    # standup sont des indices du modèle SANS roues).
-    # Les probabilités ci-dessous = palier 0 du curriculum ground_state_mix.
+    # ── 地面启动: 趴卧 / 仰卧 / 已站立 ─────────────────────────────
+    # 在 cfg.events 中最后添加: 执行顺序按插入顺序, 此项需覆盖 reset_base /
+    # reset_robot_joints 设定的姿态.
+    # "已站立" 桶不是装饰: 没它 policy 学会起立但不会 TENIR, 起立后立即摔倒.
+    # 无 "坐着" 桶 → 无需重映射 sitting_joint_overrides (standup 的是无轮子
+    # 模型的索引).
+    # 下方概率 = ground_state_mix 课程阶段 0.
     cfg.events["set_ground_state"] = EventTermCfg(
         func=microduck_mdp.set_random_ground_state,
         mode="reset",
         params={
-            "face_down_prob": 0.50,   # ventre (+90° de pitch)
-            "face_up_prob":   0.00,   # dos — le plus dur, introduit tard
-            "sitting_prob":   0.00,
-            "standing_prob":  0.50,
+            "face_down_prob": 0.50,  # 趴卧 (+90° pitch)
+            "face_up_prob": 0.00,  # 仰卧 — 最难, 后期引入
+            "sitting_prob": 0.00,
+            "standing_prob": 0.50,
             "sitting_joint_overrides": None,
-            # Les deux poses de départ (ventre/dos) partagent une SEULE plage de z,
-            # or leurs contacts n'ont rien de commun : le ventre ne décolle du sol
-            # qu'à partir de 0.0752, le dos repose à 0.0475. Un plancher unique ne
-            # peut donc pas être idéal pour les deux. On choisit 0.076 pour éliminer
-            # toute interpénétration côté ventre (mesuré : à 0.05, +25 mm dans le
-            # sol), au prix d'un dos qui démarre 28–42 mm au-dessus de son repos —
-            # un artefact bien plus doux qu'un pushout de contact.
-            "prone_z_min":    0.076,
-            "prone_z_max":    0.09,
-            # Debout sur roues : ROLLER_STAND_Z = 0.138 (contre 0.11–0.12 sans roues).
+            # 两个起始姿态 (趴卧/仰卧) 共享单一 z 范围, 而它们的接触毫无共同:
+            # 趴卧从 0.0752 才离地, 仰卧静息于 0.0475. 单一下限无法对两者都
+            # 理想. 取 0.076 以消除趴卧侧的穿透 (测得: 0.05 时入地 +25 mm),
+            # 代价是仰卧起始高出静息 28-42 mm — 比接触推压柔和得多的伪影.
+            "prone_z_min": 0.076,
+            "prone_z_max": 0.09,
+            # 轮上站立: ROLLER_STAND_Z = 0.138 (无轮时 0.11-0.12).
             "standing_z_min": 0.134,
             "standing_z_max": 0.144,
-            # Bruit de pitch/roll au départ. Attention : dans
-            # set_random_ground_state le bucket « debout » réutilise le quaternion
-            # du bucket « assis », donc ce bruit s'applique AUSSI aux départs
-            # debout — c'est voulu (pas de sur-apprentissage du parfaitement droit).
+            # 起始 pitch/roll 噪声. 注意: set_random_ground_state 中 "站立" 桶
+            # 复用 "坐着" 桶的四元数, 故该噪声也作用于站立启动 — 这是刻意的
+            # (避免对完美正立过拟合).
             "sitting_tilt_max": math.radians(10),
         },
     )
 
-    # Le robot DÉMARRE tombé → la terminaison sur inclinaison n'a aucun sens ici
-    # (elle tuerait l'épisode au premier pas). nan_state, hérité, reste.
+    # 机器人从摔倒启动 → 倾斜终止在此无意义 (会在第一步就结束 episode).
+    # 继承的 nan_state 保留.
     cfg.terminations.pop("fell_over", None)
 
-    # Curriculum des poses de départ, easy → hard. Avec un mélange plat dès le
-    # départ, la policy optimise la majorité facile et laisse le dos sous-entraîné
-    # (leçon du standup : il gelait en « ne rien faire » sur cette pose). On
-    # introduit donc debout+ventre d'abord, le dos tard, et on biaise vers les
-    # poses dures à la fin pour qu'elles reçoivent le plus d'entraînement.
+    # 起始姿态课程, 易 → 难. 一开始就混合会导致 policy 优化多数简单 case,
+    # 仰卧欠训练 (standup 的教训: 它在该姿态上冻结为 "什么都不做"). 故先引入
+    # 站立+趴卧, 仰卧后引入, 末期偏向难姿态使其获得最多训练.
     cfg.curriculum["ground_state_mix"] = CurriculumTermCfg(
         func=microduck_mdp.event_param_curriculum,
         params={
             "event_name": "set_ground_state",
             "param_stages": [
-                {"step": 0, "params": {
-                    "standing_prob": 0.50, "sitting_prob": 0.00,
-                    "face_down_prob": 0.50, "face_up_prob": 0.00}},
-                {"step": 600 * NUM_STEPS_PER_ENV, "params": {
-                    "standing_prob": 0.35, "sitting_prob": 0.00,
-                    "face_down_prob": 0.45, "face_up_prob": 0.20}},
-                {"step": 1500 * NUM_STEPS_PER_ENV, "params": {
-                    "standing_prob": 0.25, "sitting_prob": 0.00,
-                    "face_down_prob": 0.40, "face_up_prob": 0.35}},
-                {"step": 2500 * NUM_STEPS_PER_ENV, "params": {
-                    "standing_prob": 0.20, "sitting_prob": 0.00,
-                    "face_down_prob": 0.40, "face_up_prob": 0.40}},
+                {
+                    "step": 0,
+                    "params": {
+                        "standing_prob": 0.50,
+                        "sitting_prob": 0.00,
+                        "face_down_prob": 0.50,
+                        "face_up_prob": 0.00,
+                    },
+                },
+                {
+                    "step": 600 * NUM_STEPS_PER_ENV,
+                    "params": {
+                        "standing_prob": 0.35,
+                        "sitting_prob": 0.00,
+                        "face_down_prob": 0.45,
+                        "face_up_prob": 0.20,
+                    },
+                },
+                {
+                    "step": 1500 * NUM_STEPS_PER_ENV,
+                    "params": {
+                        "standing_prob": 0.25,
+                        "sitting_prob": 0.00,
+                        "face_down_prob": 0.40,
+                        "face_up_prob": 0.35,
+                    },
+                },
+                {
+                    "step": 2500 * NUM_STEPS_PER_ENV,
+                    "params": {
+                        "standing_prob": 0.20,
+                        "sitting_prob": 0.00,
+                        "face_down_prob": 0.40,
+                        "face_up_prob": 0.40,
+                    },
+                },
             ],
         },
     )
 
-    # Override de play : forcer les départs sur le dos pour pouvoir les inspecter.
-    # On écrit les probabilités dans l'événement ET on retire le curriculum : sans
-    # ça, event_param_curriculum (qui tourne AVANT les événements de reset) les
-    # réécrirait avec son palier 0 dès le premier reset. Uniquement en play, donc
-    # l'entraînement et son curriculum easy → hard sont intouchés.
+    # play 覆盖: 强制仰卧启动以便检查. 在事件中写概率, 并删除课程 — 否则
+    # event_param_curriculum (在 reset 事件之前运行) 会在第一次 reset 就用
+    # 阶段 0 改写. 仅 play 时生效, 因此训练及其 易→难 课程不受影响.
     if play:
         play_face_up = _resolve_play_face_up()
         if play_face_up is not None:
             remainder = 1.0 - play_face_up
-            cfg.events["set_ground_state"].params.update({
-                "face_up_prob":    play_face_up,
-                "face_down_prob":  remainder * _PLAY_FACE_DOWN_SHARE,
-                "standing_prob":   remainder * (1.0 - _PLAY_FACE_DOWN_SHARE),
-                "sitting_prob":    0.00,
-            })
+            cfg.events["set_ground_state"].params.update(
+                {
+                    "face_up_prob": play_face_up,
+                    "face_down_prob": remainder * _PLAY_FACE_DOWN_SHARE,
+                    "standing_prob": remainder * (1.0 - _PLAY_FACE_DOWN_SHARE),
+                    "sitting_prob": 0.00,
+                }
+            )
             del cfg.curriculum["ground_state_mix"]
 
-    # ── Friction de roulement INVERSÉE : freinées → libres ───────────────────
-    # C'est la seule pièce vraiment nouvelle de cet env, et le cœur de la
-    # difficulté : les roues roulent, donc il n'y a AUCUNE adhérence
-    # longitudinale pour pousser sur le sol. L'env roller fait MONTER cette
-    # friction (0 → 0.0015) ; ici on la fait DESCENDRE, pour bootstrapper le
-    # geste sur un problème facile (roues quasi bloquées ≈ des pieds) avant
-    # d'imposer la physique réelle du roulement.
+    # ── 滚动摩擦反向: 制动 → 自由 ───────────────────────────────────
+    # 这是本 env 真正新增的部分, 也是难点的核心: 轮子会滚, 因此纵向无任何
+    # 抓地力推地面. roller env 让此摩擦 MONTER (0 → 0.0015); 此处让其
+    # DESCENDRE, 以在简单问题 (近乎锁死的轮子 ≈ 脚) 上 bootstrap 动作,
+    # 再施加真实滚动物理.
     #
-    # DIAGNOSTIC à surveiller : si Episode_Reward/standing_composite s'écroule à
-    # un palier, le geste « pieds adhérents » ne transfère pas aux roues libres
-    # → il faudra guider une technique de patineur (appui genou intermédiaire,
-    # un patin à la fois). C'est un résultat exploitable, pas un échec.
+    # 待观察诊断: 若 Episode_Reward/standing_composite 在某阶段崩塌, "脚踏式"
+    # 动作无法迁移到自由轮 → 需引入滑冰者技巧 (中间膝撑, 一次一只滑板).
+    # 这是可用的结果, 不是失败.
     #
-    # ATTENTION sim2real : seuls les checkpoints d'APRÈS le dernier palier
-    # (iter 4000+) sont candidats au déploiement. Avant, la policy s'appuie sur
-    # une friction de roulement qui n'existe pas sur le vrai robot.
+    # 注意 sim2real: 仅最后阶段 (iter 4000+) 之后的 checkpoint 才是部署候选.
+    # 在此之前, policy 依赖真机上不存在的滚动摩擦.
     _WHEEL_FRICTION_STAGE0 = (0.0500, 0.0500)
     cfg.curriculum["wheel_friction"] = CurriculumTermCfg(
         func=microduck_mdp.wheel_friction_curriculum,
         params={
             "event_name": "randomize_wheel_friction",
             "ranges_stages": [
-                {"step": 0,                        "ranges": _WHEEL_FRICTION_STAGE0},
+                {"step": 0, "ranges": _WHEEL_FRICTION_STAGE0},
                 {"step": 1000 * NUM_STEPS_PER_ENV, "ranges": (0.0200, 0.0200)},
                 {"step": 2000 * NUM_STEPS_PER_ENV, "ranges": (0.0080, 0.0080)},
                 {"step": 3000 * NUM_STEPS_PER_ENV, "ranges": (0.0030, 0.0030)},
@@ -460,47 +438,46 @@ def make_microduck_roller_standup_env_cfg(play: bool = False) -> ManagerBasedRlE
             ],
         },
     )
-    # Redondance défensive : le curriculum manager tourne AVANT les événements de
-    # reset à chaque reset (y compris le tout premier), et wheel_friction_curriculum
-    # défaut lui-même sur le palier 0 — donc cette ligne n'est jamais nécessaire en
-    # pratique. Elle garde juste la valeur PAR DÉFAUT de l'événement cohérente avec
-    # le palier 0 du curriculum, au cas où quelqu'un retire le curriculum plus tard
-    # en laissant l'événement en place.
+    # 防御性冗余: 课程管理器在每次 reset (含第一次) 时先于 reset 事件运行,
+    # 且 wheel_friction_curriculum 自身默认到阶段 0 — 实际上这行从不必要.
+    # 仅保持事件 PAR DÉFAUT 值与课程阶段 0 一致, 以防日后有人删除课程但
+    # 保留事件.
     cfg.events["randomize_wheel_friction"].params["ranges"] = _WHEEL_FRICTION_STAGE0
 
-    # ── action_rate : la rampe du standup, pas celle du roller ───────────────
-    # L'env roller monte à -2.0 pour un gait calme. C'est un bloqueur de
-    # mouvement : il ralentit l'action rapide dont le relevé depuis le dos a
-    # besoin (le standup documente qu'un action_rate trop fort tuait cette
-    # récupération). La douceur est portée ici par joint_torque_rate_l2.
+    # ── action_rate: standup 的 ramp, 而非 roller 的 ─────────────────
+    # roller env 升到 -2.0 以求步态平稳. 这是动作阻断: 减慢仰卧起立所需的
+    # 快速动作 (standup 记录过强 action_rate 杀死此恢复). 此处的柔和由
+    # joint_torque_rate_l2 承担.
     cfg.rewards["action_rate_l2"].weight = -0.6
     cfg.curriculum["action_rate_weight"] = CurriculumTermCfg(
         func=microduck_mdp.reward_weight,
         params={
             "reward_name": "action_rate_l2",
             "weight_stages": [
-                {"step": 0,                       "weight": -0.4},
+                {"step": 0, "weight": -0.4},
                 {"step": 250 * NUM_STEPS_PER_ENV, "weight": -0.8},
                 {"step": 500 * NUM_STEPS_PER_ENV, "weight": -1.0},
             ],
         },
     )
 
-    # ── Poussées rampées ────────────────────────────────────────────────────
-    # push_robot est hérité de l'env roller (±0.2 m/s, toutes les 3–6 s) mais
-    # sans curriculum. Une bourrade dès le pas 0 parasite le bootstrap du
-    # relevé : on la fait monter comme le standup.
+    # ── ramp 推力 ───────────────────────────────────────────────────
+    # push_robot 继承自 roller env (±0.2 m/s, 每 3-6 s) 但无课程. 第 0 步就
+    # 推一下会干扰起立 bootstrap: 像 standup 那样逐步引入.
     cfg.curriculum["push_magnitude"] = CurriculumTermCfg(
         func=microduck_mdp.push_curriculum,
         params={
             "event_name": "push_robot",
             "push_stages": [
-                {"step": 0, "velocity_range": {
-                    "x": (0.0, 0.0), "y": (0.0, 0.0)}},
-                {"step": 500 * NUM_STEPS_PER_ENV, "velocity_range": {
-                    "x": (-0.08, 0.08), "y": (-0.08, 0.08)}},
-                {"step": 1000 * NUM_STEPS_PER_ENV, "velocity_range": {
-                    "x": (-0.2, 0.2), "y": (-0.2, 0.2)}},
+                {"step": 0, "velocity_range": {"x": (0.0, 0.0), "y": (0.0, 0.0)}},
+                {
+                    "step": 500 * NUM_STEPS_PER_ENV,
+                    "velocity_range": {"x": (-0.08, 0.08), "y": (-0.08, 0.08)},
+                },
+                {
+                    "step": 1000 * NUM_STEPS_PER_ENV,
+                    "velocity_range": {"x": (-0.2, 0.2), "y": (-0.2, 0.2)},
+                },
             ],
         },
     )
@@ -508,12 +485,12 @@ def make_microduck_roller_standup_env_cfg(play: bool = False) -> ManagerBasedRlE
     return cfg
 
 
-# ── Config du runner RL — identique à standup ─────────────────────────────────
+# ── RL runner 配置 — 与 standup 相同 ──────────────────────────────────
 MicroduckRollerStandUpRlCfg = RslRlOnPolicyRunnerCfg(
     actor=RslRlModelCfg(
         hidden_dims=(512, 256, 128),
         activation="elu",
-        obs_normalization=True,  # le normaliseur DOIT être baké dans l'ONNX par export.py
+        obs_normalization=True,  # normaliseur 必须由 export.py 烘焙进 ONNX
         distribution_cfg={
             "class_name": "GaussianDistribution",
             "init_std": 1.0,
@@ -538,8 +515,8 @@ MicroduckRollerStandUpRlCfg = RslRlOnPolicyRunnerCfg(
         lam=0.95,
         desired_kl=0.01,
         max_grad_norm=1.0,
-        # Symétrie OFF : SYMMETRY_CFG est câblé pour l'ancien layout 51D et casse
-        # sur le 61D (même situation que tous les envs v1.5+).
+        # 对称性 OFF: SYMMETRY_CFG 为旧的 51D 布局硬编码, 在 61D 上会破裂
+        # (与所有 v1.5+ env 相同情况).
         symmetry_cfg=None,
     ),
     wandb_project="mjlab_microduck",

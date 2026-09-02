@@ -1,7 +1,7 @@
-"""robot_state_is_nan doit attraper un état non-fini n'importe où (joints OU base
-OU roues), pas seulement dans joint_pos — sinon un free-joint qui diverge en NaN
-échappe au reset et corrompt l'obs critic (base_lin_vel/wheel_vel), ce qui tue
-l'entraînement via le check_nan global de rsl_rl.
+"""robot_state_is_nan 必须捕捉任何地方 (关节 或 base 或 轮子) 的非有限
+状态, 不能只看 joint_pos —— 否则一个 free-joint 在 NaN 上发散会逃过
+reset 并污染 critic obs (base_lin_vel/wheel_vel), 然后通过 rsl_rl 的
+check_nan 杀掉训练.
 """
 
 import torch
@@ -38,7 +38,7 @@ class _Env:
 
 
 def test_catches_base_linear_velocity_nan():
-    # env 1 : vitesse de base NaN (free-joint divergé) — joint_pos reste fini.
+    # env 1: base 速度 NaN (free-joint 发散) —— joint_pos 仍有限.
     d = _Data(3)
     d.root_link_lin_vel_w[1, 0] = float("nan")
     out = robot_state_is_nan(_Env(d))
@@ -46,7 +46,7 @@ def test_catches_base_linear_velocity_nan():
 
 
 def test_catches_base_velocity_inf():
-    # inf dans la vitesse angulaire de base (avant qu'il ne devienne NaN).
+    # base 角速度里的 inf (在它变 NaN 之前).
     d = _Data(2)
     d.root_link_ang_vel_w[0, 2] = float("inf")
     out = robot_state_is_nan(_Env(d))
@@ -54,7 +54,7 @@ def test_catches_base_velocity_inf():
 
 
 def test_still_catches_joint_pos_nan():
-    # comportement historique préservé.
+    # 历史行为保留.
     d = _Data(2)
     d.joint_pos[0, 1] = float("nan")
     out = robot_state_is_nan(_Env(d))

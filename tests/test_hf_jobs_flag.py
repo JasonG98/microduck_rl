@@ -1,25 +1,25 @@
-"""`train <task> ... --hf-jobs` must keep submitting to HF Jobs.
+"""`train <task> ... --hf-jobs` 必须持续提交到 HF Jobs.
 
-The flag was owned by a `train` console script of ours that was supposed to
-shadow mjlab's. Same-name console scripts are last-writer-wins, mjlab's shim
-won, and the flag silently vanished: `uv run train ... --hf-jobs` hit mjlab's
-tyro parser and died with `Unrecognized options: --hf-jobs` (2026-08-31).
+这个 flag 本来属于我们自己的 `train` console script, 它本该 shadow
+mjlab 的同名 console script.同名 console script 是 last-writer-wins,
+mjlab 的 shim 赢了, flag 静默消失: `uv run train ... --hf-jobs` 撞上
+mjlab 的 tyro parser 并以 `Unrecognized options: --hf-jobs` 死掉
+(2026-08-31).
 
-It is now intercepted from the `mjlab.tasks` plugin entry point instead
-(train_hook.py), which mjlab imports itself, so either shim handles the flag.
+现在改为从 `mjlab.tasks` plugin entry point 拦截 (train_hook.py),
+mjlab 自己会 import 它, 所以两个 shim 都能处理这个 flag.
 
-The `train` declaration stays, though — dropping it made things worse, not
-better: both RECORDs claim bin/train, so `uv sync` uninstalled the file and
-nothing recreated mjlab's, leaving `uv run train` to find liblinear's `train`
-on PATH ("can't open input file Mjlab-Velocity-Flat-MicroDuck").
+`train` 的声明要保留 —— 删掉它会让事情更糟而不是更好: 两个 RECORD
+都声称 bin/train, 所以 `uv sync` 会卸载文件, 而没人重建 mjlab 的, 于是
+`uv run train` 会从 PATH 找到 liblinear 的 `train` ("can't open input
+file Mjlab-Velocity-Flat-MicroDuck").
 
-Three things must hold, none of which fails loudly on its own:
+三件事必须同时成立, 任何一件都不会单独响亮地失败:
 
-1. `train` stays declared, and stays behaviorally identical to mjlab's.
-2. mjlab must still reach `mjlab_microduck.tasks` before it parses argv — a
-   refactor of mjlab's plugin loading would silently drop the flag.
-3. Both shims must intercept, since which one lands in bin/ is not ours to
-   decide.
+1. `train` 保持声明, 且与 mjlab 的行为一致.
+2. mjlab 必须仍能在解析 argv 之前 reach 到 `mjlab_microduck.tasks` ——
+   如果 mjlab 的 plugin loading 重构, 会静默丢掉这个 flag.
+3. 两个 shim 必须都拦截, 因为最终落进 bin/ 的那个不是我们能决定的.
 """
 
 import shutil
@@ -43,17 +43,17 @@ def _our_scripts():
 
 
 def test_train_script_stays_declared():
-    """Removing it uninstalls bin/train and recreates nothing (see docstring)."""
+    """删掉它会卸载 bin/train 且不重建 (见模块 docstring)."""
     assert _our_scripts().get("train") == "mjlab_microduck.train_cli:main", (
-        "[project.scripts] must keep declaring `train`. Both this package and "
-        "mjlab claim bin/train in their RECORD, so dropping the declaration "
-        "makes `uv sync` DELETE the script instead of reverting it to mjlab's, "
-        "and `uv run train` then runs an unrelated `train` from PATH."
+        "[project.scripts] 必须继续声明 `train`.本包和 mjlab 都在各自的"
+        " RECORD 里声称 bin/train, 所以删掉声明会让 `uv sync` DELETE 该"
+        " script 而不是回退到 mjlab 的, 然后 `uv run train` 会跑 PATH 上"
+        "另一个无关的 `train`."
     )
 
 
 def test_our_train_script_only_delegates_to_mjlab():
-    """The collision is only safe while the two shims are interchangeable."""
+    """碰撞只有在两个 shim 可以互换时才安全."""
     import mjlab.scripts.train
 
     from mjlab_microduck import train_cli
@@ -62,42 +62,40 @@ def test_our_train_script_only_delegates_to_mjlab():
     original = mjlab.scripts.train.main
     mjlab.scripts.train.main = lambda: called.append(True) or 5
     try:
-        assert train_cli.main() == 5, "our `train` must return mjlab's exit code"
+        assert train_cli.main() == 5, "我们的 `train` 必须返回 mjlab 的 exit code"
     finally:
         mjlab.scripts.train.main = original
-    assert called == [True], "our `train` must call mjlab's trainer, unmodified"
+    assert called == [True], "我们的 `train` 必须原封不动地调用 mjlab 的 trainer"
 
 
 def test_train_on_path_is_a_mjlab_trainer():
-    """Catches the vanished-script failure directly: `train` must be ours or
-    mjlab's, never whatever else is installed on the machine."""
+    """直接捕捉 vanished-script 失败: `train` 必须是我们的或 mjlab 的,
+    绝不能是机器上随便安装的别的什么."""
     exe = shutil.which("train")
     assert exe is not None, (
-        "no `train` on PATH — the venv script was uninstalled and not recreated; "
-        "run `uv sync --reinstall-package mjlab-microduck`."
+        "PATH 上没有 `train` —— venv script 被卸载且未重建; "
+        "运行 `uv sync --reinstall-package mjlab-microduck`."
     )
     head = Path(exe).read_bytes()[:8192]
     assert b"mjlab" in head, (
-        f"`train` resolves to {exe}, which is not a mjlab trainer. bin/train was "
-        "uninstalled and this is an unrelated binary from PATH."
+        f"`train` 解析到 {exe}, 它不是 mjlab trainer.bin/train 被卸载了,"
+        " 这是 PATH 上另一个无关的二进制."
     )
 
 
 def test_we_register_the_task_plugin_entry_point():
-    """The interception rides on this entry point; without it, no flag."""
+    """拦截挂在这个 entry point 上; 没有它, 就没有 flag."""
     groups = {ep.group: ep.value for ep in distribution("mjlab-microduck").entry_points}
     assert groups.get("mjlab.tasks") == "mjlab_microduck.tasks", (
-        "the `mjlab.tasks` entry point must stay pointed at mjlab_microduck.tasks: "
-        "it is both how tasks register AND where --hf-jobs is intercepted."
+        "`mjlab.tasks` entry point 必须保持指向 mjlab_microduck.tasks: "
+        "它既是 task 注册的方式, 也是 --hf-jobs 被拦截的地方."
     )
 
 
 @pytest.fixture
 def fake_submit(monkeypatch):
     calls = []
-    monkeypatch.setattr(
-        "mjlab_microduck.hf_jobs.submit", lambda argv: calls.append(argv) or 0
-    )
+    monkeypatch.setattr("mjlab_microduck.hf_jobs.submit", lambda argv: calls.append(argv) or 0)
     return calls
 
 
@@ -110,7 +108,7 @@ def test_hook_submits_and_strips_the_flag(monkeypatch, fake_submit):
     with pytest.raises(SystemExit) as exc:
         train_hook.maybe_submit_to_hf_jobs()
     assert exc.value.code == 0
-    # --hf-jobs must not reach the job's own `uv run train`, which is mjlab's.
+    # --hf-jobs 不能传到 job 自己的 `uv run train` (那是 mjlab 的).
     assert fake_submit == [[_TASK, "--env.scene.num-envs", "4096"]]
 
 
@@ -129,14 +127,14 @@ def test_no_flag_trains_locally(monkeypatch, fake_submit):
 
 
 def test_other_commands_do_not_submit(monkeypatch, fake_submit):
-    """`play --hf-jobs` must reach play's parser, not submit a training job."""
+    """`play --hf-jobs` 必须走到 play 的 parser, 不能提交一个训练 job."""
     monkeypatch.setattr(sys, "argv", ["/x/.venv/bin/play", _TASK, "--hf-jobs"])
     assert train_hook.maybe_submit_to_hf_jobs() is None
     assert fake_submit == []
 
 
 def test_interception_is_disarmed_inside_the_job(monkeypatch, fake_submit):
-    """Otherwise a leaked flag would make the job submit another job."""
+    """否则一个泄露的 flag 会让 job 再提交一个 job."""
     monkeypatch.setenv("MICRODUCK_IN_HF_JOB", "1")
     monkeypatch.setattr(sys, "argv", ["train", _TASK, "--hf-jobs"])
     assert train_hook.maybe_submit_to_hf_jobs() is None
@@ -144,17 +142,15 @@ def test_interception_is_disarmed_inside_the_job(monkeypatch, fake_submit):
 
 
 def test_submitted_job_env_disarms_the_interception():
-    """The env var above is only useful if submit() actually sets it."""
+    """上面这个 env 变量只有在 submit() 真的设置它时才有用."""
     src = (_ROOT / "src/mjlab_microduck/hf_jobs.py").read_text()
-    assert f'"{train_hook._IN_JOB_ENV}": "1"' in src, (
-        f"submit() must put {train_hook._IN_JOB_ENV} on the job's env"
-    )
+    assert f'"{train_hook._IN_JOB_ENV}": "1"' in src, f"submit() 必须把 {train_hook._IN_JOB_ENV} 放到 job 的 env 上"
 
 
-# The load-bearing assumption, exercised through the real import paths: both
-# `from mjlab.scripts.train import main` (mjlab's shim) and our own shim must
-# reach the hook before mjlab parses argv. In a subprocess, because it ends in
-# SystemExit inside an import.
+# 关键假设, 通过真实 import 路径来检验: 无论是 `from
+# mjlab.scripts.train import main` (mjlab 的 shim) 还是我们自己的 shim, 都
+# 必须在 mjlab 解析 argv 之前 reach 到 hook.用 subprocess, 因为它在
+# import 内部以 SystemExit 结束.
 _PROBE = """
 import sys
 sys.argv = ["train", "{task}", "--env.scene.num-envs", "4096", "--hf-jobs"]
@@ -178,9 +174,9 @@ raise SystemExit(1)
 """
 
 _SHIMS = {
-    # exactly what a bin/train written by mjlab does
+    # 正是 mjlab 写出来的 bin/train 的内容
     "mjlab": "from mjlab.scripts.train import main",
-    # ... and what one written by this package does
+    # ... 以及本包写出来的那种
     "ours": "from mjlab_microduck.train_cli import main; main()",
 }
 
@@ -196,10 +192,10 @@ def test_both_train_shims_reach_the_hook_before_parsing_argv(shim):
         cwd=_ROOT,
     )
     assert "NOT-INTERCEPTED" not in proc.stdout, (
-        f"the {shim} `train` shim no longer reaches the --hf-jobs interception "
-        "(mjlab's plugin loading changed, or it now runs after argv is parsed).\n"
+        f"{shim} `train` shim 不再 reach 到 --hf-jobs 拦截 "
+        "(mjlab 的 plugin loading 变了, 或它现在跑在 argv 解析之后).\n"
         f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr[-2000:]}"
     )
-    assert proc.returncode == 0, f"probe failed:\n{proc.stderr[-2000:]}"
+    assert proc.returncode == 0, f"probe 失败:\n{proc.stderr[-2000:]}"
     assert f"SUBMIT ['{_TASK}', '--env.scene.num-envs', '4096']" in proc.stdout
     assert "EXIT 7" in proc.stdout

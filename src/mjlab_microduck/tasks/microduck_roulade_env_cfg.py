@@ -1,121 +1,107 @@
-"""Microduck forward-roll (roulade) task — attempt 3, run 2.
+"""Microduck 前滚 (roulade) 任务 — 尝试 3, run 2.
 
-Episodic policy: robot starts standing, rolls forward over the flat top of
-its head, and lands back on its feet. Triggered at deployment like sit/standup
-(policy switch = roll starts immediately; no phase clock, no reference motion).
+Episodic policy: 机器人从站立开始, 经过头部平坦顶部向前翻滚, 然后双脚落地.
+部署时触发, 像 sit/standup 一样 (policy 切换 = 翻滚立即开始; 无相位时钟,
+无参考运动).
 
-RUN-2 REWORK (run 1 learned a violent ballistic "breakdance" whip — optimal
-under the run-1 rewards: same 2π, sooner, no cost): rotation now only counts
-while the robot touches the ground (support-gated accumulator — a roulade
-never leaves the floor), the landing annuity requires an over-the-head
-contact latch, paid progress rate is capped at 3 rad/s (faster forfeits the
-excess), an overspeed penalty taxes |ω| > 4 rad/s, and the impact/smoothness
-penalties are active from step 0 (discovery in this env is easy; style is
-the scarce resource, not exploration).
+RUN-2 重做 (run 1 学到了暴力的弹道 "breakdance" 鞭打 — run-1 奖励下的最优:
+相同 2π, 更早, 无代价): 旋转现在仅在机器人接触地面时计数 (支撑门控累加器 —
+roulade 永不离开地面), 落地年金需要过头顶接触锁, 付费进度速率上限 3 rad/s
+(更快则放弃超出部分), 超速惩罚对 |ω| > 4 rad/s 征税, 冲击/平滑惩罚从 step 0
+起活跃 (此环境中发现容易; 风格是稀缺资源, 非探索).
 
-Design (see the roulade section of mdp.py for the full history):
-  • ONE dense progress signal — paid increments of the max-so-far cumulative
-    forward rotation (potential-based: full roll pays 2π worth total, camping
-    anywhere pays zero per step).
-  • Landing rewards gated on ROLL COMPLETION (rotation frontier ≥ ~260°), not
-    on a clock — "do nothing" earns nothing, the standing spawn cannot farm
-    them, and no upright/height pressure ever opposes the flip.
-  • Reverse curriculum via mid-roll spawns (the trick that fixed face-up
-    recovery in standup): a slice of episodes starts 50°–185° into the roll,
-    tucked, with forward angular momentum, accumulator pre-set to the spawn
-    angle. The second half of a roulade IS the face-up recovery problem, which
-    we know is learnable.
-  • Élan hook for later: reset_roulade_state.forward_vel_range gives standing
-    spawns an initial forward base velocity — set ROULADE_FORWARD_VEL_RANGE
-    to e.g. (0.0, 0.3) to train rolls out of a walk. (0, 0) = standstill-only.
+设计 (完整历史见 mdp.py 的 roulade 部分):
+  • 一个密集进度信号 — 支付最大累计前进旋转的增量 (基于势函数: 完整翻滚
+    总共支付 2π 价值, 任何位置停留每步支付零).
+  • 落地奖励门控在翻滚完成 (旋转前沿 ≥ ~260°), 非时钟 — "什么都不做" 无收益,
+    站立生成无法刷取, 无直立/高度压力反对翻转.
+  • 通过翻滚中途生成做反向课程 (修复 standup 仰面恢复的技巧): 部分 episode
+    从翻滚 50°-185° 处开始, 蜷缩, 带前向角动量, 累加器预设到生成角度.
+    roulade 的后半程就是仰面恢复问题, 我们已知可学.
+  • 后续 Élan 钩子: reset_roulade_state.forward_vel_range 给站立生成一个初始
+    前向基座速度 — 设置 ROULADE_FORWARD_VEL_RANGE 到例如 (0.0, 0.3) 以训练
+    从行走中进入的翻滚. (0, 0) = 仅静止.
 
-DR / obs / regularisers mirror the standup env (velocity sim2real parity),
-with the motion-blockers (body_ang_vel, |a_z|, arrival damping) kept near zero
-during discovery and introduced late by curriculum — the roll IS a large
-angular-velocity, large-impact event; taxing attempts prevents discovery
-(proven twice on standup).
+DR / obs / 正则项镜像 standup 环境 (velocity sim2real 一致), 运动阻断项
+(body_ang_vel, |a_z|, arrival damping) 在发现期间保持近零, 由课程后引入 —
+翻滚是大角速度, 大冲击事件; 对尝试征税阻止发现 (standup 上证明两次).
 """
 
 import math
 from copy import deepcopy
 
-# Symmetry — the roll is sagittal / left-right symmetric; the mirror loss
-# directly fights the sideways-collapse failure seen in run 2. Enabled after
-# migrating symmetry.py to the 61-dim layout (2026-08-13, includes the
-# "policy" → "actor" output-key fix; roulade is the first env to use it).
+# 对称性 — 翻滚是矢状/左右对称的; 镜像损失直接对抗 run 2 中看到的侧向塌缩
+# 失败. 在 symmetry.py 迁移到 61 维布局后启用 (2026-08-13, 包含
+# "policy" → "actor" 输出键修复; roulade 是第一个使用它的环境).
 ENABLE_SYMMETRY = True
 
-# ── Domain randomisation (matched to standup/velocity for sim2real parity) ───
-ENABLE_COM_RANDOMIZATION             = True
-ENABLE_HEAD_COM_RANDOMIZATION        = True
-ENABLE_KP_RANDOMIZATION              = False  # match velocity (OFF)
-ENABLE_KD_RANDOMIZATION              = False  # match velocity (OFF)
-ENABLE_MASS_INERTIA_RANDOMIZATION    = True
-ENABLE_JOINT_FRICTION_RANDOMIZATION  = True
-ENABLE_ARMATURE_RANDOMIZATION        = True
-ENABLE_VELOCITY_PUSHES               = False  # a push mid-roll is incoherent
+# ── Domain randomisation (匹配 standup/velocity 以保证 sim2real 一致) ───
+ENABLE_COM_RANDOMIZATION = True
+ENABLE_HEAD_COM_RANDOMIZATION = True
+ENABLE_KP_RANDOMIZATION = False  # 匹配 velocity (OFF)
+ENABLE_KD_RANDOMIZATION = False  # 匹配 velocity (OFF)
+ENABLE_MASS_INERTIA_RANDOMIZATION = True
+ENABLE_JOINT_FRICTION_RANDOMIZATION = True
+ENABLE_ARMATURE_RANDOMIZATION = True
+ENABLE_VELOCITY_PUSHES = False  # 翻滚中途推力不连贯
 ENABLE_IMU_ORIENTATION_RANDOMIZATION = True
-ENABLE_ENCODER_BIAS                  = True
+ENABLE_ENCODER_BIAS = True
 
-# ── Ranges (matched to the standup env) ───────────────────────────────────────
-COM_RANDOMIZATION_RANGE             = 0.003   # ramped to 0.015 via curriculum
-HEAD_COM_RANDOMIZATION_RANGE        = 0.003   # ramped to 0.01 via curriculum
-MASS_INERTIA_RANDOMIZATION_RANGE    = (0.95, 1.05)
-ARMATURE_RANDOMIZATION_RANGE        = (0.9, 1.1)
-JOINT_FRICTION_RANDOMIZATION_RANGE  = (0.9, 1.1)
-ENCODER_BIAS_RANGE                  = (-0.015, 0.015)
-KP_RANDOMIZATION_RANGE              = (0.85, 1.15)  # unused (kp DR off)
-KD_RANDOMIZATION_RANGE              = (0.9, 1.1)    # unused (kd DR off)
+# ── 范围 (匹配 standup 环境) ───────────────────────────────────────────────
+COM_RANDOMIZATION_RANGE = 0.003  # 通过课程渐升到 0.015
+HEAD_COM_RANDOMIZATION_RANGE = 0.003  # 通过课程渐升到 0.01
+MASS_INERTIA_RANDOMIZATION_RANGE = (0.95, 1.05)
+ARMATURE_RANDOMIZATION_RANGE = (0.9, 1.1)
+JOINT_FRICTION_RANDOMIZATION_RANGE = (0.9, 1.1)
+ENCODER_BIAS_RANGE = (-0.015, 0.015)
+KP_RANDOMIZATION_RANGE = (0.85, 1.15)  # 未使用 (kp DR off)
+KD_RANDOMIZATION_RANGE = (0.9, 1.1)  # 未使用 (kd DR off)
 IMU_ORIENTATION_RANDOMIZATION_ANGLE = 6.0
 
-# Episode: a CONTROLLED roll takes ~2 s + rise ~1.5 s + settle. Run-3: 4 → 5 s
-# (4 s left no room for the rise after a paced roll).
+# Episode: 一个受控翻滚 ~2 s + 起立 ~1.5 s + 稳定. Run-3: 4 → 5 s
+# (4 s 在节奏翻滚后无空间起立).
 EPISODE_LENGTH_S = 5.0
 
-# Empirically-measured standing trunk height (standup lesson: don't guess).
+# 实测站立躯干高度 (standup 教训: 不要猜测).
 STAND_Z = 0.115
 
-# ── Élan (run-up) hook ────────────────────────────────────────────────────────
-# (0, 0) = roll from a standstill (run 1). Widen to e.g. (0.0, 0.3) to train
-# rolls entered with forward momentum — standing spawns then get a random
-# initial forward base velocity, approximating a hand-off from the walking
-# policy without simulating the walk itself.
+# ── Élan (run-up) 钩子 ────────────────────────────────────────────────────────
+# (0, 0) = 从静止翻滚 (run 1). 展宽到例如 (0.0, 0.3) 以训练带前向动量进入的
+# 翻滚 — 站立生成获得随机初始前向基座速度, 近似从行走 policy 交接而不模拟
+# 行走本身.
 ROULADE_FORWARD_VEL_RANGE = (0.0, 0.0)
 
-# ── Mid-roll spawn (reverse curriculum) ───────────────────────────────────────
-# 90° = balanced on the head, 180° = on the back, 270° = supine, ~340° = seated
-# leaning back, >260° opens the landing gate. Run-3 change: MAX widened
-# 185° → 340° — run-2 wandb showed the second half of the roll (supine →
-# seated → rise) was never spawned and never learned; spawns past ~300° open
-# the landing gate at birth, giving dense on-policy data on the crouch→stand
-# last mile (the velstand run-5 crouch-basin lesson).
-MIDROLL_PITCH_MIN   = math.radians(50.0)
-MIDROLL_PITCH_MAX   = math.radians(340.0)
-MIDROLL_OMEGA_RANGE = (0.0, 3.0)   # rad/s forward momentum at spawn
-# Tuck anchor: legs folded (crouch-anchor values from the velstand crouch
-# reset) + CHIN TUCK (run-5: neck_pitch −1 / head_pitch +1 puts the flat head
-# top squarely on the floor — measured axis_z −0.99 vs +0.6 for the passive
-# face-plant; the head-top latch requires this, so mid-roll spawns must
-# demonstrate the tucked configuration). Servo-index keyed; mid-roll spawns
-# lerp HOME→tuck by a per-env factor.
+# ── 翻滚中途生成 (反向课程) ───────────────────────────────────────
+# 90° = 头顶平衡, 180° = 仰卧, 270° = 仰面, ~340° = 后倾坐姿,
+# >260° 打开落地门控. Run-3 变更: MAX 展宽 185° → 340° — run-2 wandb 显示
+# 翻滚后半程 (仰面 → 坐姿 → 起立) 从未被生成也从未学会; ~300° 后的生成
+# 出生即打开落地门控, 给 crouch→stand 最后一英里密集 on-policy 数据
+# (velstand run-5 crouch-basin 教训).
+MIDROLL_PITCH_MIN = math.radians(50.0)
+MIDROLL_PITCH_MAX = math.radians(340.0)
+MIDROLL_OMEGA_RANGE = (0.0, 3.0)  # rad/s 生成时前向动量
+# 蜷缩锚点: 腿折叠 (velstand crouch reset 的 crouch-anchor 值) + 下巴收紧
+# (run-5: neck_pitch −1 / head_pitch +1 使平坦头顶正对地面 — 实测 axis_z
+# −0.99 vs 被动 face-plant 的 +0.6; 头顶锁需要此姿态, 所以翻滚中途生成必须
+# 呈现蜷缩构型). servo-index 键控; 翻滚中途生成按每环境因子 lerp HOME→tuck.
 TUCK_OVERRIDES = {
-    2:  -1.15,  # left  hip_pitch
-    3:   1.25,  # left  knee
-    4:   1.05,  # left  ankle
-    5:  -1.0,   # neck_pitch  (chin tuck)
-    6:   1.0,   # head_pitch  (chin tuck)
-    11:  1.15,  # right hip_pitch
+    2: -1.15,  # left  hip_pitch
+    3: 1.25,  # left  knee
+    4: 1.05,  # left  ankle
+    5: -1.0,  # neck_pitch  (chin tuck)
+    6: 1.0,  # head_pitch  (chin tuck)
+    11: 1.15,  # right hip_pitch
     12: -1.25,  # right knee
     13: -1.05,  # right ankle
 }
 
-# Rotation thresholds (rad) for the state-based gates.
+# 旋转阈值 (rad), 用于状态门控.
 LANDING_GATE_LO = math.radians(260.0)
 LANDING_GATE_HI = math.radians(330.0)
-RISE_GATE_LO    = math.radians(180.0)
-RISE_GATE_HI    = math.radians(260.0)
+RISE_GATE_LO = math.radians(180.0)
+RISE_GATE_HI = math.radians(260.0)
 
-_LEG_JOINTS  = [0, 1, 2, 3, 4, 9, 10, 11, 12, 13]
+_LEG_JOINTS = [0, 1, 2, 3, 4, 9, 10, 11, 12, 13]
 _NECK_JOINTS = [5, 6, 7, 8]
 
 from mjlab.envs import ManagerBasedRlEnvCfg
@@ -130,8 +116,8 @@ from mjlab.managers import (
 )
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.rl import (
-    RslRlOnPolicyRunnerCfg,
     RslRlModelCfg,
+    RslRlOnPolicyRunnerCfg,
 )
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.tasks.velocity import mdp
@@ -141,12 +127,11 @@ from mjlab.utils.noise import UniformNoiseCfg as Unoise
 from mjlab_microduck.robot.microduck_constants import MICRODUCK_STANDUP_ROBOT_CFG
 from mjlab_microduck.tasks import mdp as microduck_mdp
 from mjlab_microduck.tasks.microduck_velocity_env_cfg import HEAD_BODY_NAMES
-from mjlab_microduck.tasks.symmetry import PpoWithSymmetryCfg, SYMMETRY_CFG
+from mjlab_microduck.tasks.symmetry import SYMMETRY_CFG, PpoWithSymmetryCfg
 
 
 def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-    """Create Microduck forward-roll environment configuration."""
-
+    """创建 Microduck 前滚环境配置."""
     feet_ground_cfg = ContactSensorCfg(
         name="feet_ground_contact",
         primary=ContactMatch(
@@ -170,10 +155,10 @@ def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         num_slots=1,
     )
 
-    # Head-ground contact — the roll's pivot signal. jaw_soft is the body that
-    # carries the head collision geoms (top_head_shell = the flat top, jaw,
-    # bottom_head_shell) in robot_allcollisions.xml. NAME IS LOAD-BEARING:
-    # _update_roulade_accum reads it for the over-the-head latch.
+    # 头部-地面接触 — 翻滚的枢轴信号. jaw_soft 是承载头部碰撞 geom
+    # (top_head_shell = 平坦顶部, jaw, bottom_head_shell) 的 body, 在
+    # robot_allcollisions.xml 中. 名称是关键载荷:
+    # _update_roulade_accum 读取它用于过头顶锁.
     head_ground_cfg = ContactSensorCfg(
         name="head_ground_contact",
         primary=ContactMatch(mode="body", pattern="jaw_soft", entity="robot"),
@@ -183,10 +168,9 @@ def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         num_slots=1,
     )
 
-    # Whole-robot ground contact — the SUPPORT GATE (run-2 fix): the rotation
-    # accumulator only integrates while some robot geom touches the terrain,
-    # so ballistic flips ("breakdance") earn no progress and never complete.
-    # NAME IS LOAD-BEARING: _update_roulade_accum reads it.
+    # 全机器人地面接触 — 支撑门控 (run-2 修复): 旋转累加器仅在某个机器人 geom
+    # 接触地形时积分, 所以弹道翻转 ("breakdance") 无进度收益且永不完成.
+    # 名称是关键载荷: _update_roulade_accum 读取它.
     robot_ground_cfg = ContactSensorCfg(
         name="robot_ground_contact",
         primary=ContactMatch(mode="subtree", pattern="trunk_base", entity="robot"),
@@ -198,21 +182,26 @@ def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
     foot_frictions_geom_names = ("left_foot_collision", "right_foot_collision")
 
-    # ── Base config ───────────────────────────────────────────────────────────
+    # ── 基础配置 ───────────────────────────────────────────────────────────
     cfg = make_velocity_env_cfg()
 
     cfg.scene.entities = {"robot": MICRODUCK_STANDUP_ROBOT_CFG}
-    cfg.scene.sensors  = (feet_ground_cfg, self_collision_cfg, head_ground_cfg, robot_ground_cfg)
+    cfg.scene.sensors = (
+        feet_ground_cfg,
+        self_collision_cfg,
+        head_ground_cfg,
+        robot_ground_cfg,
+    )
     cfg.viewer.body_name = "trunk_base"
 
     cfg.episode_length_s = EPISODE_LENGTH_S
 
-    # ── Actions ───────────────────────────────────────────────────────────────
+    # ── 动作 ───────────────────────────────────────────────────────────────
     joint_pos_action = cfg.actions["joint_pos"]
     assert isinstance(joint_pos_action, JointPositionActionCfg)
     joint_pos_action.scale = 1.0
 
-    # ── Rewards: drop walking-specific terms ──────────────────────────────────
+    # ── 奖励: 丢弃行走专用项 ──────────────────────────────────────────────────
     for name in [
         "track_linear_velocity",
         "track_angular_velocity",
@@ -225,32 +214,30 @@ def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         if name in cfg.rewards:
             del cfg.rewards[name]
 
-    # ── Rewards: roulade task set ─────────────────────────────────────────────
-    # Progress increments — the one dense task signal during the roll. During
-    # a 1.5 s roll it averages ~0.7/step; total payout per full roll from a
-    # standing spawn ≈ weight × (episode steps it took) × mean ≈ weight × 50.
+    # ── 奖励: roulade 任务集 ─────────────────────────────────────────────
+    # 进度增量 — 翻滚期间唯一的密集任务信号. 1.5 s 翻滚期间平均 ~0.7/step;
+    # 从站立生成每个完整翻滚的总支付 ≈ weight × (所用 episode 步数) × 均值
+    # ≈ weight × 50.
     cfg.rewards["roulade_progress"] = RewardTermCfg(
         func=microduck_mdp.roulade_progress,
         weight=8.0,
-        # max_paid_rate: run-4 raised 3 → 5 rad/s. Measured physics (run-3
-        # checkpoint eval): the over-the-top transit runs at 3.5–5.5 rad/s —
-        # this robot is 10 cm tall, its natural tumble timescale is fast, and
-        # the 3 rad/s cap was forfeiting most of the physically-necessary
-        # rotation. Style pressure lives in |a_z| / action_rate / the support
-        # gate, not in fighting gravity's clock.
+        # max_paid_rate: run-4 提升 3 → 5 rad/s. 实测物理 (run-3 checkpoint
+        # eval): 顶部翻转以 3.5-5.5 rad/s 运行 — 此机器人 10 cm 高, 自然翻滚
+        # 时间尺度快, 3 rad/s 上限放弃了大部分物理必要的旋转. 风格压力在
+        # |a_z| / action_rate / 支撑门控中, 而非对抗重力时钟.
         params={"target_angle": 2 * math.pi, "max_paid_rate": 5.0},
     )
 
-    # Whip-speed tax — run-4 threshold 4 → 7 rad/s (above the measured p90
-    # transit speed of ~5.5): taxes genuine whips, not the natural tumble.
+    # 鞭打速度税 — run-4 阈值 4 → 7 rad/s (高于实测 p90 翻转速度 ~5.5):
+    # 对真正的鞭打征税, 非自然翻滚.
     cfg.rewards["roulade_overspeed"] = RewardTermCfg(
         func=microduck_mdp.roulade_overspeed_penalty,
         weight=-0.1,
         params={"omega_max": 7.0},
     )
 
-    # Head-as-pivot shaping: contact × mid-roll window × forward-rate factor
-    # (the rate factor kills the "rest face-down with head on floor" farm).
+    # 头部作枢轴整形: 接触 × 翻滚中途窗口 × 前向速率因子
+    # (速率因子杀死 "面朝下头贴地休息" 的刷取).
     cfg.rewards["roulade_head_pivot"] = RewardTermCfg(
         func=microduck_mdp.roulade_head_pivot,
         weight=0.5,
@@ -262,25 +249,25 @@ def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         },
     )
 
-    # Completion-gated standing annuity — the dominant attractor. Broad stds
-    # (standup composite lesson: partial landing must score visibly, ~0.2+).
+    # 完成门控站立年金 — 主吸引子. 宽松 std (standup 组合教训: 部分落地
+    # 必须可见地得分, ~0.2+).
     cfg.rewards["roulade_landing_composite"] = RewardTermCfg(
         func=microduck_mdp.roulade_landing_composite,
         weight=4.0,
         params={
-            "target_height":    STAND_Z,
-            "height_std":       0.04,
-            "upright_std":      0.40,
-            "pose_std":         0.40,
-            "joint_indices":    _LEG_JOINTS,
-            "gate_lo":          LANDING_GATE_LO,
-            "gate_hi":          LANDING_GATE_HI,
+            "target_height": STAND_Z,
+            "height_std": 0.04,
+            "upright_std": 0.40,
+            "pose_std": 0.40,
+            "joint_indices": _LEG_JOINTS,
+            "gate_lo": LANDING_GATE_LO,
+            "gate_hi": LANDING_GATE_HI,
             "target_overrides": None,
         },
     )
 
-    # Completion-gated bootstrap layers (gradient far from the goal, where the
-    # composite product is ≈0): linear upright + broad height Gaussian.
+    # 完成门控 bootstrap 层 (远离目标的梯度, 此处组合乘积 ≈0):
+    # 线性直立 + 宽松高度高斯.
     cfg.rewards["roulade_upright_after_roll"] = RewardTermCfg(
         func=microduck_mdp.roulade_upright_after_roll,
         weight=1.5,
@@ -291,65 +278,58 @@ def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         weight=1.0,
         params={
             "target_height": STAND_Z,
-            "std":           0.04,
-            "gate_lo":       LANDING_GATE_LO,
-            "gate_hi":       LANDING_GATE_HI,
+            "std": 0.04,
+            "gate_lo": LANDING_GATE_LO,
+            "gate_hi": LANDING_GATE_HI,
         },
     )
 
-    # Sharp landing layer (run-4): tight-std upright × height product on top
-    # of the broad composite. Run-3 eval showed EVERY completed episode
-    # parking at the same z≈0.105 / 27°-lean pose — the broad stds score ~0.5
-    # there, no gradient to finish. Sharp layer: ~0.1 at the basin, ~1.0
-    # upright — 10× differential across the last mile.
+    # 尖锐落地层 (run-4): 紧 std 直立 × 高度乘积叠加在宽松组合之上.
+    # Run-3 eval 显示每个完成 episode 停在相同 z≈0.105 / 27° 倾斜姿态 —
+    # 宽松 std 在那里得分 ~0.5, 无完成梯度. 尖锐层: 盆地处 ~0.1, 直立处
+    # ~1.0 — 最后一英里 10× 差分.
     cfg.rewards["roulade_landing_sharp"] = RewardTermCfg(
         func=microduck_mdp.roulade_landing_sharp,
         weight=2.0,
         params={
             "target_height": STAND_Z,
-            "height_std":    0.015,
-            "upright_std":   0.3,
-            "gate_lo":       LANDING_GATE_LO,
-            "gate_hi":       LANDING_GATE_HI,
+            "height_std": 0.015,
+            "upright_std": 0.3,
+            "gate_lo": LANDING_GATE_LO,
+            "gate_hi": LANDING_GATE_HI,
         },
     )
 
-    # Completion-gated stand tax (run-3, THE standup lesson): once the
-    # rotation is done, every step spent below STAND_Z costs — "crumple in a
-    # heap after the roll" flips from free to net-negative, the same fix that
-    # broke standup's static-sit basin (its height L1 at ÷4-scaled weight
-    # 7.5). Gate closed during the roll, so the roll itself is never taxed;
-    # mid/late-roll spawns are born with it active, which is the point.
+    # 完成门控站立税 (run-3, standup 核心教训): 旋转完成后, 每步低于 STAND_Z
+    # 付费 — "翻滚后蜷缩成一堆" 从免费翻转为净负, 与打破 standup 静态坐姿
+    # 盆地的修复相同 (其高度 L1 在 ÷4 缩放权重 7.5). 翻滚期间门控关闭,
+    # 翻滚本身不被征税; 翻滚中/后期生成出生即激活此税, 这正是目的.
     cfg.rewards["roulade_stand_tax"] = RewardTermCfg(
         func=microduck_mdp.roulade_stand_tax,
         weight=5.0,
         params={
             "target_height": STAND_Z,
-            "gate_lo":       LANDING_GATE_LO,
-            "gate_hi":       LANDING_GATE_HI,
+            "gate_lo": LANDING_GATE_LO,
+            "gate_hi": LANDING_GATE_HI,
         },
     )
 
-    # Exit-rise bootstrap: upward CoM velocity, gated to the late-roll region
-    # (supine → up is the face-up-recovery problem; end-state rewards have zero
-    # gradient at zero motion there — standup lesson #2).
+    # 退出起立 bootstrap: 向上 CoM 速度, 门控到翻滚后期区域 (仰面 → 起立
+    # 是仰面恢复问题; 终态奖励在零运动处零梯度 — standup 教训 #2).
     cfg.rewards["roulade_rise_velocity"] = RewardTermCfg(
         func=microduck_mdp.roulade_rise_velocity,
         weight=0.75,
         params={
             "max_height": STAND_Z + 0.01,
-            "gate_lo":    RISE_GATE_LO,
-            "gate_hi":    RISE_GATE_HI,
+            "gate_lo": RISE_GATE_LO,
+            "gate_hi": RISE_GATE_HI,
         },
     )
 
-    # Straightness — run-5: the run-4 policy rolled over the SHOULDER (lower
-    # energy path than straight over the head — it avoids the fully-inverted
-    # configuration, same cheat human beginners default to). The structural
-    # fix is the flatness gate on the accumulator + the head-top latch (side
-    # rolls no longer count as rotation at all); these penalties provide the
-    # dense per-step gradient back toward the plane, weights raised 5× from
-    # the run-2 values that were noise against progress@8.
+    # 直线性 — run-5: run-4 policy 从肩膀翻滚 (比直过头顶能量更低的路径 —
+    # 避免完全倒立构型, 与人类初学者默认欺骗相同). 结构修复是累加器的
+    # 平坦度门控 + 头顶锁 (侧翻不再计为旋转); 这些惩罚提供朝平面的密集
+    # 每步梯度, 权重从 run-2 值提升 5× (后者对 progress@8 是噪声).
     cfg.rewards["roulade_sagittal"] = RewardTermCfg(
         func=microduck_mdp.roulade_sagittal_penalty,
         weight=-0.1,
@@ -363,78 +343,69 @@ def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         weight=-0.5,
     )
 
-    # ── Sim2real regularisers ─────────────────────────────────────────────────
-    # Motion-blockers stay near zero during discovery (the roll IS a large
-    # angular-velocity + impact event); the settle/polish pressure comes from
-    # the LATE-introduced gated terms below (arrival_damping, |a_z|, torque
-    # rate) — the standup timing lesson.
+    # ── Sim2real 正则项 ─────────────────────────────────────────────────
+    # 运动阻断项在发现期间保持近零 (翻滚是大角速度 + 冲击事件); 稳定/打磨
+    # 压力来自后引入的下方门控项 (arrival_damping, |a_z|, 力矩速率) —
+    # standup 时序教训.
     cfg.rewards["action_rate_l2"] = RewardTermCfg(func=mdp.action_rate_l2, weight=-0.1)
-    cfg.rewards["joint_torque_rate_l2"] = RewardTermCfg(
-        func=microduck_mdp.joint_torque_rate_l2, weight=0.0
-    )
+    cfg.rewards["joint_torque_rate_l2"] = RewardTermCfg(func=microduck_mdp.joint_torque_rate_l2, weight=0.0)
 
     cfg.rewards["body_ang_vel"].params["asset_cfg"].body_names = ("trunk_base",)
-    cfg.rewards["body_ang_vel"].weight = -0.002   # must stay ≈0: the roll is ω
+    cfg.rewards["body_ang_vel"].weight = -0.002  # 必须保持 ≈0: 翻滚就是 ω
     cfg.rewards["angular_momentum"].weight = -0.001
     cfg.rewards.pop("soft_landing", None)
 
-    # Arrival damper — trunk ω_xy² gated on standing height AND low tilt, so
-    # the roll itself is never taxed; introduced at 0 and ramped by curriculum.
+    # 到达阻尼器 — 躯干 ω_xy² 门控在站立高度 AND 低倾斜, 所以翻滚本身
+    # 永不被征税; 从 0 引入并由课程渐升.
     cfg.rewards["arrival_damping"] = RewardTermCfg(
         func=microduck_mdp.body_ang_vel_at_height,
         weight=0.0,
         params={
-            "height_low":    0.09,
-            "height_high":   0.11,
+            "height_low": 0.09,
+            "height_high": 0.11,
             "tilt_full_deg": 20.0,
             "tilt_zero_deg": 45.0,
-            "asset_cfg":     SceneEntityCfg("robot", body_names=("trunk_base",)),
+            "asset_cfg": SceneEntityCfg("robot", body_names=("trunk_base",)),
         },
     )
 
-    # |a_z| impact shaping — active from step 0 (run-2 change: run 1
-    # discovered a violent solution under zero impact cost and locked it in;
-    # discovery is easy in this env, so shaping the style from the start is
-    # the priority). Curriculum ramps it further.
-    # NOTE: trunk_vertical_accel_penalty is SELF-NEGATING (returns -|a_z|) →
-    # POSITIVE weight (penalty sign convention; a negative weight here would
-    # reward violence — caught in the run-2 smoke test, sum was positive).
+    # |a_z| 冲击整形 — 从 step 0 起活跃 (run-2 变更: run 1 在零冲击代价下发现
+    # 暴力解并锁定; 此环境中发现容易, 所以从一开始就整形风格是优先).
+    # 课程进一步渐升.
+    # 注意: trunk_vertical_accel_penalty 自否定 (返回 -|a_z|) → 正权重
+    # (惩罚符号约定; 负权重在此会奖励暴力 — run-2 smoke test 中捕获, 总和为正).
     cfg.rewards["gentle_landing"] = RewardTermCfg(
         func=microduck_mdp.trunk_vertical_accel_penalty,
         weight=0.002,
         params={"asset_cfg": SceneEntityCfg("robot", body_names=("trunk_base",))},
     )
 
-    # Self-collision — LIGHT: a tucked roll needs body-on-body contact
-    # (knees against trunk); standup's -1.0 would fight the tuck.
+    # 自碰撞 — 轻: 蜷缩翻滚需要身体对身体接触 (膝对躯干); standup 的
+    # -1.0 会对抗蜷缩.
     cfg.rewards["self_collisions"] = RewardTermCfg(
         func=mdp.self_collision_cost,
         weight=-0.1,
         params={"sensor_name": self_collision_cfg.name},
     )
 
-    # Always-on upright would oppose the flip (the old attempt's core failure);
-    # landing uprightness is handled by the completion-gated terms above.
+    # 常开直立会反对翻转 (旧尝试的核心失败); 落地直立由上方完成门控项处理.
     if "upright" in cfg.rewards:
         del cfg.rewards["upright"]
 
-    # ── Observations (identical layout to walking / standup policies) ─────────
+    # ── 观测 (与行走 / standup policies 布局相同) ─────────
     del cfg.observations["actor"].terms["base_lin_vel"]
 
     cfg.observations["critic"].terms["base_lin_vel"] = ObservationTermCfg(
-        func=mdp.base_lin_vel, scale=1.0,
+        func=mdp.base_lin_vel,
+        scale=1.0,
     )
     del cfg.observations["critic"].terms["foot_height"]
     del cfg.observations["actor"].terms["height_scan"]
     del cfg.observations["critic"].terms["height_scan"]
 
     gravity_term_name = "projected_gravity"
-    cfg.observations["actor"].terms[gravity_term_name] = deepcopy(
-        cfg.observations["actor"].terms[gravity_term_name]
-    )
-    cfg.observations["actor"].terms["base_ang_vel"] = deepcopy(
-        cfg.observations["actor"].terms["base_ang_vel"]
-    )
+    cfg.observations["actor"].terms[gravity_term_name] = deepcopy(cfg.observations["actor"].terms[gravity_term_name])
+    cfg.observations["actor"].terms["base_ang_vel"] = deepcopy(cfg.observations["actor"].terms["base_ang_vel"])
 
     cfg.observations["actor"].terms["base_ang_vel"].delay_min_lag = 0
     cfg.observations["actor"].terms["base_ang_vel"].delay_max_lag = 1
@@ -443,10 +414,10 @@ def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     cfg.observations["actor"].terms[gravity_term_name].delay_max_lag = 1
     cfg.observations["actor"].terms[gravity_term_name].delay_update_period = 64
 
-    cfg.observations["actor"].terms["base_ang_vel"].noise    = Unoise(n_min=-0.03, n_max=0.03)
+    cfg.observations["actor"].terms["base_ang_vel"].noise = Unoise(n_min=-0.03, n_max=0.03)
     cfg.observations["actor"].terms[gravity_term_name].noise = Unoise(n_min=-0.01, n_max=0.01)
-    cfg.observations["actor"].terms["joint_pos"].noise       = Unoise(n_min=-0.001, n_max=0.001)
-    cfg.observations["actor"].terms["joint_vel"].noise       = Unoise(n_min=-0.25, n_max=0.25)
+    cfg.observations["actor"].terms["joint_pos"].noise = Unoise(n_min=-0.001, n_max=0.001)
+    cfg.observations["actor"].terms["joint_vel"].noise = Unoise(n_min=-0.25, n_max=0.25)
 
     if ENABLE_IMU_ORIENTATION_RANDOMIZATION:
         av = cfg.observations["actor"].terms["base_ang_vel"]
@@ -456,9 +427,7 @@ def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         g.func = microduck_mdp.projected_gravity_imu_misaligned
         g.params = {"max_angle_deg": IMU_ORIENTATION_RANDOMIZATION_ANGLE}
 
-    cfg.observations["actor"].terms["joint_vel"] = deepcopy(
-        cfg.observations["actor"].terms["joint_vel"]
-    )
+    cfg.observations["actor"].terms["joint_vel"] = deepcopy(cfg.observations["actor"].terms["joint_vel"])
     cfg.observations["actor"].terms["joint_vel"].delay_min_lag = 1
     cfg.observations["actor"].terms["joint_vel"].delay_max_lag = 1
     cfg.observations["actor"].terms["joint_vel"].delay_update_period = 0
@@ -476,24 +445,25 @@ def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     else:
         cfg.events.pop("encoder_bias", None)
 
-    # Command obs slots: zero padding for BOTH head (4) and body (6) — the head
-    # is part of the task (it's the pivot), so no head_pose command here, but
-    # the 61D obs layout parity with velocity/standup is kept so the runtime
-    # stack works unchanged (send zeros).
+    # 指令 obs 槽位: head (4) 和 body (6) 均零填充 — 头部是任务一部分
+    # (它是枢轴), 所以此处无 head_pose 指令, 但保持与 velocity/standup 的
+    # 61D obs 布局一致, 使 runtime 栈无需更改即可工作 (发送零).
     for group in ("actor", "critic"):
         cfg.observations[group].terms["head_command"] = ObservationTermCfg(
-            func=microduck_mdp.zero_command_padding, params={"dim": 4},
+            func=microduck_mdp.zero_command_padding,
+            params={"dim": 4},
         )
         cfg.observations[group].terms["body_command"] = ObservationTermCfg(
-            func=microduck_mdp.zero_command_padding, params={"dim": 6},
+            func=microduck_mdp.zero_command_padding,
+            params={"dim": 6},
         )
 
-    # ── Command: tiny noise around zero (kept for obs-shape parity) ──────────
+    # ── 指令: 零周围微小噪声 (保持 obs-shape 一致) ──────────
     command = cfg.commands["twist"]
     command.rel_standing_envs = 0.0
-    command.rel_heading_envs  = 0.0
-    command.heading_command   = False
-    command.ranges.heading    = None
+    command.rel_heading_envs = 0.0
+    command.heading_command = False
+    command.ranges.heading = None
     command.resampling_time_range = (EPISODE_LENGTH_S, EPISODE_LENGTH_S * 2)
     command.debug_vis = False
     command.ranges.lin_vel_x = (-0.01, 0.01)
@@ -501,8 +471,8 @@ def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     command.ranges.ang_vel_z = (-0.05, 0.05)
     cfg.commands["twist"] = microduck_mdp.VelocityCommandCommandOnlyCfg(**vars(command))
 
-    # ── Terminations ──────────────────────────────────────────────────────────
-    # Falling over is the task — keep only the NaN guard + timeout.
+    # ── 终止 ──────────────────────────────────────────────────────────
+    # 摔倒就是任务 — 仅保留 NaN 守卫 + 超时.
     if "fell_over" in cfg.terminations:
         del cfg.terminations["fell_over"]
     cfg.terminations["nan_state"] = TerminationTermCfg(
@@ -510,7 +480,7 @@ def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         time_out=False,
     )
 
-    # ── Events ────────────────────────────────────────────────────────────────
+    # ── 事件 ────────────────────────────────────────────────────────────
     cfg.events["expand_bam_friction_fields"] = EventTermCfg(
         func=microduck_mdp.expand_bam_friction_fields,
         mode="startup",
@@ -522,27 +492,27 @@ def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     cfg.events["foot_friction"].params["asset_cfg"].geom_names = foot_frictions_geom_names
     cfg.events["foot_friction"].params["ranges"] = (0.7, 1.3)
 
-    # Standing start + mid-roll reverse-curriculum spawns; also resets the
-    # rotation accumulator (must run after reset_robot_joints — dict insertion
-    # order — since mid-roll tuck lerps FROM the HOME pose it wrote).
+    # 站立起点 + 翻滚中途反向课程生成; 也重置旋转累加器 (必须在
+    # reset_robot_joints 之后运行 — 字典插入顺序 — 因为翻滚中途 tuck 从
+    # 其写入的 HOME 姿态 lerp).
     cfg.events["set_roulade_state"] = EventTermCfg(
         func=microduck_mdp.reset_roulade_state,
         mode="reset",
         params={
-            "standing_prob":      0.5,
-            "midroll_prob":       0.5,
-            "standing_z_min":     0.11,
-            "standing_z_max":     0.12,
-            "standing_tilt_max":  math.radians(5.0),
-            "forward_vel_range":  ROULADE_FORWARD_VEL_RANGE,
-            "midroll_pitch_min":  MIDROLL_PITCH_MIN,
-            "midroll_pitch_max":  MIDROLL_PITCH_MAX,
-            "midroll_z_min":      0.05,
-            "midroll_z_max":      0.10,
+            "standing_prob": 0.5,
+            "midroll_prob": 0.5,
+            "standing_z_min": 0.11,
+            "standing_z_max": 0.12,
+            "standing_tilt_max": math.radians(5.0),
+            "forward_vel_range": ROULADE_FORWARD_VEL_RANGE,
+            "midroll_pitch_min": MIDROLL_PITCH_MIN,
+            "midroll_pitch_max": MIDROLL_PITCH_MAX,
+            "midroll_z_min": 0.05,
+            "midroll_z_max": 0.10,
             "midroll_omega_range": MIDROLL_OMEGA_RANGE,
-            "tuck_overrides":     TUCK_OVERRIDES,
-            "tuck_factor_range":  (0.3, 1.0),
-            "joint_noise_std":    0.08,
+            "tuck_overrides": TUCK_OVERRIDES,
+            "tuck_factor_range": (0.3, 1.0),
+            "joint_noise_std": 0.08,
         },
     )
 
@@ -617,31 +587,35 @@ def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             },
         )
 
-    # ── Terrain ───────────────────────────────────────────────────────────────
+    # ── 地形 ───────────────────────────────────────────────────────────────
     cfg.scene.terrain.terrain_type = "plane"
     cfg.scene.terrain.terrain_generator = None
 
-    # ── Curriculum ────────────────────────────────────────────────────────────
+    # ── 课程 ────────────────────────────────────────────────────────────
     if "terrain_levels" in cfg.curriculum:
         del cfg.curriculum["terrain_levels"]
     del cfg.curriculum["command_vel"]
 
-    # Reverse-curriculum mix: heavy mid-roll early (the completion sub-task is
-    # learnable from day 0 — it overlaps face-up recovery), shift toward
-    # standing starts as the full roll gets discovered. Mid-roll never goes to
-    # zero: it keeps the second half practiced and is realistic DR anyway.
-    # Run-3: stages pushed 1500/3000 → 3000/6000 — run 2 shifted away from
-    # mid-roll BEFORE standing-spawn rolls were mastered (progress episode-sum
-    # was ~20% of a full roll at iter 1876; curriculum-pacing failure, same
-    # family as the 2026-07-28 standup regression).
+    # 反向课程混合: 早期重翻滚中途 (完成子任务从 day 0 可学 — 与仰面恢复
+    # 重叠), 随完整翻滚被发现转向站立起点. 翻滚中途永不到零: 它保持后半程
+    # 练习且反正也是现实 DR.
+    # Run-3: 阶段推迟 1500/3000 → 3000/6000 — run 2 在站立生成翻滚掌握前
+    # 转离翻滚中途 (iter 1876 时进度 episode-sum 是完整翻滚的 ~20%;
+    # 课程节奏失败, 与 2026-07-28 standup 回归同类).
     cfg.curriculum["roulade_spawn_mix"] = CurriculumTermCfg(
         func=microduck_mdp.event_param_curriculum,
         params={
             "event_name": "set_roulade_state",
             "param_stages": [
-                {"step": 0,          "params": {"standing_prob": 0.50, "midroll_prob": 0.50}},
-                {"step": 3000 * 24,  "params": {"standing_prob": 0.65, "midroll_prob": 0.35}},
-                {"step": 6000 * 24,  "params": {"standing_prob": 0.80, "midroll_prob": 0.20}},
+                {"step": 0, "params": {"standing_prob": 0.50, "midroll_prob": 0.50}},
+                {
+                    "step": 3000 * 24,
+                    "params": {"standing_prob": 0.65, "midroll_prob": 0.35},
+                },
+                {
+                    "step": 6000 * 24,
+                    "params": {"standing_prob": 0.80, "midroll_prob": 0.20},
+                },
             ],
         },
     )
@@ -652,8 +626,8 @@ def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             params={
                 "event_name": "randomize_com",
                 "range_stages": [
-                    {"step": 0,         "range": 0.003},
-                    {"step": 500 * 24,  "range": 0.005},
+                    {"step": 0, "range": 0.003},
+                    {"step": 500 * 24, "range": 0.005},
                     {"step": 1000 * 24, "range": 0.01},
                     {"step": 1500 * 24, "range": 0.015},
                 ],
@@ -666,63 +640,61 @@ def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             params={
                 "event_name": "randomize_head_com",
                 "range_stages": [
-                    {"step": 0,         "range": 0.003},
-                    {"step": 500 * 24,  "range": 0.005},
+                    {"step": 0, "range": 0.003},
+                    {"step": 500 * 24, "range": 0.005},
                     {"step": 1000 * 24, "range": 0.01},
                 ],
             },
         )
 
-    # action_rate ramp — run-4: ceiling softened -0.6 → -0.4 and the -0.4
-    # stage pushed 2000 → 3000. Run-3's landing metrics peaked at ~iter 2700
-    # then declined, tracking the -0.4/-0.6 stages — the tightening was
-    # squeezing the rise. (Run-2 note still holds: -0.1 minimum from step 0,
-    # run 1 bred violence under near-zero smoothing.)
+    # action_rate 渐升 — run-4: 上限软化 -0.6 → -0.4 且 -0.4 阶段推迟
+    # 2000 → 3000. Run-3 落地指标在 ~iter 2700 达峰后下降, 跟踪 -0.4/-0.6
+    # 阶段 — 收紧正在挤压起立. (Run-2 注释仍有效: step 0 起 -0.1 最低,
+    # run 1 在近零平滑下滋生暴力.)
     cfg.curriculum["action_rate_weight"] = CurriculumTermCfg(
         func=microduck_mdp.reward_weight,
         params={
-            "reward_name":   "action_rate_l2",
+            "reward_name": "action_rate_l2",
             "weight_stages": [
-                {"step": 0,          "weight": -0.1},
-                {"step": 1500 * 24,  "weight": -0.2},
-                {"step": 3000 * 24,  "weight": -0.4},
+                {"step": 0, "weight": -0.1},
+                {"step": 1500 * 24, "weight": -0.2},
+                {"step": 3000 * 24, "weight": -0.4},
             ],
         },
     )
 
-    # Smoothness polish — introduced only after the roll skill exists (standup
-    # timing lesson: any attempt-tax active during discovery prevents the
-    # maneuver from being found at all; fix is timing, not magnitude).
+    # 平滑打磨 — 仅在翻滚技能存在后引入 (standup 时序教训: 发现期间活跃的
+    # 任何尝试税阻止动作被发现; 修复是时序, 非量级).
     cfg.curriculum["arrival_damping_weight"] = CurriculumTermCfg(
         func=microduck_mdp.reward_weight,
         params={
-            "reward_name":   "arrival_damping",
+            "reward_name": "arrival_damping",
             "weight_stages": [
-                {"step": 0,          "weight": 0.0},
-                {"step": 2500 * 24,  "weight": -0.025},
-                {"step": 3500 * 24,  "weight": -0.05},
+                {"step": 0, "weight": 0.0},
+                {"step": 2500 * 24, "weight": -0.025},
+                {"step": 3500 * 24, "weight": -0.05},
             ],
         },
     )
     cfg.curriculum["torque_rate_weight"] = CurriculumTermCfg(
         func=microduck_mdp.reward_weight,
         params={
-            "reward_name":   "joint_torque_rate_l2",
+            "reward_name": "joint_torque_rate_l2",
             "weight_stages": [
-                {"step": 0,          "weight": 0.0},
-                {"step": 2500 * 24,  "weight": -5e-4},
-                {"step": 3500 * 24,  "weight": -1e-3},
+                {"step": 0, "weight": 0.0},
+                {"step": 2500 * 24, "weight": -5e-4},
+                {"step": 3500 * 24, "weight": -1e-3},
             ],
         },
     )
     cfg.curriculum["gentle_landing_weight"] = CurriculumTermCfg(
         func=microduck_mdp.reward_weight,
         params={
-            # POSITIVE weights: the func is self-negating (returns -|a_z|).
-            "reward_name":   "gentle_landing",
+            # 正权重: 函数自否定 (返回 -|a_z|).
+            "reward_name": "gentle_landing",
             "weight_stages": [
-                {"step": 0,          "weight": 0.002},
-                {"step": 2500 * 24,  "weight": 0.005},
+                {"step": 0, "weight": 0.002},
+                {"step": 2500 * 24, "weight": 0.005},
             ],
         },
     )
@@ -730,13 +702,13 @@ def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     return cfg
 
 
-# ── RL runner config ──────────────────────────────────────────────────────────
+# ── RL runner 配置 ──────────────────────────────────────────────────────────
 
 MicroduckRouladeRlCfg = RslRlOnPolicyRunnerCfg(
     actor=RslRlModelCfg(
         hidden_dims=(512, 256, 128),
         activation="elu",
-        obs_normalization=True,  # normalizer MUST be baked into ONNX by export.py
+        obs_normalization=True,  # normalizer 必须由 export.py 烘焙到 ONNX
         distribution_cfg={
             "class_name": "GaussianDistribution",
             "init_std": 1.0,

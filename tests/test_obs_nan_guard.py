@@ -1,12 +1,11 @@
-"""The critic obs must survive a non-finite sensor reading.
+"""critic obs 必须能扛住非有限的 sensor 读数.
 
-Regression for the 2026-08-21 crash: rsl_rl's check_nan killed a
-Velocity2-Rough-Backlash run with "observation group 'critic' contains NaN".
-`nan_state` (robot_state_is_nan) only covered joint + root state, but the
-critic also carries three SENSOR-derived terms (raycast heights, contact
-air-time, contact forces). MuJoCo can return a non-finite contact force while
-the integrated robot state is still clean, so the env was never reset and the
-NaN reached the runner.
+针对 2026-08-21 崩溃的回归: rsl_rl 的 check_nan 用 "observation group
+'critic' contains NaN" 杀掉了一次 Velocity2-Rough-Backlash 训练.
+`nan_state` (robot_state_is_nan) 只覆盖 joint + root state, 但 critic
+还带三个 SENSOR 衍生项 (raycast heights, contact air-time, contact
+forces).MuJoCo 可以在积分后的机器人状态仍然干净时返回一个非有限
+的 contact force, 所以 env 永不 reset, NaN 流到了 runner.
 """
 
 import torch
@@ -31,7 +30,7 @@ class _Scene:
         self._asset = asset
 
     def __getitem__(self, key):
-        return self.sensors[key] if key in self.sensors else self._asset
+        return self.sensors.get(key, self._asset)
 
 
 class _AssetData:
@@ -65,7 +64,7 @@ def _force(n, bad_env=None, value=float("nan")):
 
 
 def test_state_only_check_misses_bad_contact_force():
-    # This is the gap that killed the run: robot state is clean, force is not.
+    # 这就是杀掉训练的缺口: 机器人状态干净, force 不干净.
     env = _Env(3, _force(3, bad_env=1))
     assert not microduck_mdp.robot_state_is_nan(env).any()
 
@@ -95,7 +94,7 @@ def test_finite_helper_sanitizes_nan_and_inf():
 
 
 def test_safe_obs_wrappers_are_wired_into_the_critic():
-    # Guards must actually be installed on the env cfg, not just exist.
+    # guard 必须真的装在 env cfg 上, 不能只是存在.
     from mjlab_microduck.tasks.microduck_velocity_env_cfg import (
         make_microduck_velocity_env_cfg,
     )
@@ -103,9 +102,7 @@ def test_safe_obs_wrappers_are_wired_into_the_critic():
     cfg = make_microduck_velocity_env_cfg(rough=True)
     terms = cfg.observations["critic"].terms
     for name in ("foot_contact_forces", "foot_height", "foot_air_time"):
-        assert terms[name].func.__name__.endswith("_safe"), (
-            f"critic/{name} lost its NaN guard"
-        )
+        assert terms[name].func.__name__.endswith("_safe"), f"critic/{name} 丢了 NaN guard"
 
 
 def test_nan_state_termination_watches_the_contact_sensor():
@@ -115,13 +112,12 @@ def test_nan_state_termination_watches_the_contact_sensor():
 
     cfg = make_microduck_velocity_env_cfg(rough=True)
     params = cfg.terminations["nan_state"].params
-    assert params.get("sensor_names"), "nan_state no longer watches contact forces"
+    assert params.get("sensor_names"), "nan_state 不再监视 contact forces"
 
 
 def test_standup_env_is_also_guarded():
-    # The deployed standing policy trains on StandUp, which builds on mjlab's
-    # base env (NOT the microduck velocity env) and therefore does not inherit
-    # the guards wired there.
+    # 部署的站立 policy 在 StandUp 上训练, 后者基于 mjlab 的 base env (不
+    # 是 microduck velocity env) 构建, 因此不继承那里接的 guard.
     from mjlab_microduck.tasks.microduck_standup_env_cfg import (
         make_microduck_standup_env_cfg,
     )
@@ -129,9 +125,7 @@ def test_standup_env_is_also_guarded():
     cfg = make_microduck_standup_env_cfg()
     terms = cfg.observations["critic"].terms
     for name in ("foot_contact_forces", "foot_air_time"):
-        assert terms[name].func.__name__.endswith("_safe"), (
-            f"standup critic/{name} lost its NaN guard"
-        )
+        assert terms[name].func.__name__.endswith("_safe"), f"standup critic/{name} 丢了 NaN guard"
     assert cfg.terminations["nan_state"].params.get("sensor_names"), (
-        "standup nan_state no longer watches contact forces"
+        "standup nan_state 不再监视 contact forces"
     )
