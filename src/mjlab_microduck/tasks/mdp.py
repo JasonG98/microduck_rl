@@ -146,7 +146,7 @@ _NECK_JOINT_PATTERNS = [
 
 
 def _servo_joint_ids(env: "ManagerBasedRlEnv", asset: Entity) -> list:
-    """servo (非 ``passive_``) 关节的 entity 局部索引, 带缓存.
+    """Servo (非 ``passive_``) 关节的 entity 局部索引, 带缓存.
 
     本模块中所有基于关节索引的 reward/event 参数 (``joint_indices``, ``target_overrides``, qpos 列运算)
     都是针对规范的 14-servo 布局编写的.在带额外非驱动关节的模型上 — backlash 铰链、滚轮、
@@ -538,7 +538,7 @@ def feet_air_time_upright(
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
     **air_time_kwargs,
 ) -> torch.Tensor:
-    """velocity 模板的 feet_air_time, 在摔倒 (倾斜 > gate) 时归零.
+    """Velocity 模板的 feet_air_time, 在摔倒 (倾斜 > gate) 时归零.
 
     velstand: 一个躯干趴地的机器人仍能通过 air-time 窗口有节奏地蹬腿 — 这就是观察到的
     "趴地抖腿" 漏洞.Air time 仅在直立时才有意义.
@@ -759,7 +759,7 @@ def body_ang_vel_at_height(
     tilt_full_deg: float | None = None,
     tilt_zero_deg: float = 45.0,
 ) -> torch.Tensor:
-    """trunk ``sum(ω_xy²)`` 惩罚, 由 trunk z (以及可选的倾斜) 门控.
+    """Trunk ``sum(ω_xy²)`` 惩罚, 由 trunk z (以及可选的倾斜) 门控.
 
     高度门控的到达阻尼: 在 ``height_low`` 以下为零 (地面 recovery —
     翻转/滚动需要大的躯干旋转, 必须保持自由), 在 ``height_high`` 以上为
@@ -1270,7 +1270,7 @@ def _crouch_pose_error(
     rise_end: float,
     stand_pose: dict | None = None,
 ):
-    """phase 插值蹲姿的 (cur, target) 关节张量.
+    """Phase 插值蹲姿的 (cur, target) 关节张量.
 
     target 按关节在 STAND <-> crouch_pose 之间由 4 段混合 b(phase) ∈ [0,1]
     插值 (0 = 站, 1 = 蹲).STAND 为给定 `stand_pose`, 否则为模型 DEFAULT
@@ -2134,7 +2134,7 @@ def interpolated_height_target(
     ramp_start_frac: float = 0.0,
     ramp_end_frac: float = 1.0,
 ) -> torch.Tensor:
-    """trunk z vs 时间插值目标高度的高斯奖励.
+    """Trunk z vs 时间插值目标高度的高斯奖励.
 
     ``interpolated_pose_target_match`` 的配套 — 同样的时间插值逻辑应用到 trunk 高度.
     """
@@ -2284,7 +2284,7 @@ def multistage_height_target(
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
     std: float = 0.03,
 ) -> torch.Tensor:
-    """trunk z 的多 waypoint 高斯奖励."""
+    """Trunk z 的多 waypoint 高斯奖励."""
     target_z = _multistage_target_height(env, waypoints)
     asset = env.scene[asset_cfg.name]
     z = torch.nan_to_num(asset.data.root_link_pos_w[:, 2] - env.scene.terrain.env_origins[:, 2], nan=0.0)
@@ -2352,7 +2352,7 @@ def height_target_gaussian(
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
     std: float = 0.02,
 ) -> torch.Tensor:
-    """trunk z 对单一固定目标的高斯奖励."""
+    """Trunk z 对单一固定目标的高斯奖励."""
     asset = env.scene[asset_cfg.name]
     z = torch.nan_to_num(asset.data.root_link_pos_w[:, 2] - env.scene.terrain.env_origins[:, 2], nan=0.0)
     return torch.exp(-(((z - target_height) / std) ** 2))
@@ -2539,7 +2539,7 @@ def _kick_pose_error(
     return_end: float,
     joint_names: list | None = None,
 ):
-    """shoot 手势的 (cur, target), 关节按名称解析.
+    """Shoot 手势的 (cur, target), 关节按名称解析.
 
     3 个姿态共享相同的键 (14 关节).名称顺序由 `stand_pose` 给出 (或由
     `joint_names` 提供 — 键的子集, 例如一侧右腿 + 颈, 另一侧左腿, 用于对
@@ -2824,7 +2824,7 @@ def ground_pick_return_pose(
     command_name: str = "twist",
     joint_indices: list | None = None,
 ) -> torch.Tensor:
-    """ground pick 后回到 standing 姿态的奖励, 由 return 相位加权.
+    """Ground pick 后回到 standing 姿态的奖励, 由 return 相位加权.
 
     return 相位为下半周期 (sin < 0, phase ∈ [0.5, 1.0]), 由
     max(0, -sin(2π*phase)) 平滑加权.
@@ -3001,7 +3001,7 @@ def sample_mouth_payload(
     min_kg: float = 0.01,
     max_kg: float = 0.04,
 ) -> None:
-    """reset 事件: 每个 env 抽取 "口中含物" 的质量 (kg), 存于 env._mouth_payload_kg.
+    """Reset 事件: 每个 env 抽取 "口中含物" 的质量 (kg), 存于 env._mouth_payload_kg.
 
     由 apply_mouth_payload_force 使用.
     """
@@ -3022,7 +3022,9 @@ def apply_mouth_payload_force(
     ramp: float = 0.05,
     gravity: float = 9.81,
 ) -> torch.Tensor:
-    """每步 hook (用作权重 0 的 reward): 将口中所持物的 *重量* 作为外部
+    """将所含物的向下作用力施加到嘴尖.
+
+    每步 hook (用作权重 0 的 reward): 将口中所持物的 *重量* 作为外部
     垂直力施加到 mouth_tip, 由上升阶段 gate 控制 (phase >= hold_end, 在
     "抓取"时刻快速 ramp).
 
@@ -3514,7 +3516,7 @@ def projected_gravity(
     env: ManagerBasedRlEnv,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-    """body 系下的投影重力向量.
+    """Body 系下的投影重力向量.
 
     返回投影到机器人 body 系的重力向量, 表示纯朝向不含线加速度.
     比原始 accelerometer 更简单, 仅依赖朝向.
@@ -3699,7 +3701,7 @@ def standing_phase(
     env: ManagerBasedRlEnv,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-    """standing 任务的简单时间相位.
+    """Standing 任务的简单时间相位.
 
     返回基于时间在 0 到 1 之间循环的标量相位值.让策略在站立时也有
     时间推移的感觉.
@@ -3943,7 +3945,7 @@ def randomize_base_orientation(
     max_roll_deg: float = 5.0,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ):
-    """episode 开始时随机化 base 朝向以强制反应式行为.
+    """Episode 开始时随机化 base 朝向以强制反应式行为.
 
     在每个 episode 开始时给机器人 base 朝向添加随机 pitch 和 roll.防止策略
     记忆单一初始状态, 迫使其使用反馈来适应不同朝向.
@@ -4094,7 +4096,7 @@ def set_random_ground_state(
     sitting_tilt_max: float = 0.0,
     face_up_roll_max: float = 0.0,
 ):
-    """reset 到随机地面状态: face-down, face-up, sitting 或 standing.
+    """Reset 到随机地面状态: face-down, face-up, sitting 或 standing.
 
     比 ``set_random_prone_orientation`` 更广 — stand-up env 用它让策略学会
     从任何合理姿态恢复, 包括 sitting keyframe (sit policy 的静止状态) 和
@@ -5825,7 +5827,7 @@ def spin_rate_track(
     brake_end: float = SPIN_BRAKE_END,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-    """spin 主目标: 跟踪目标 yaw 角速度 ω*(φ).
+    """Spin 主目标: 跟踪目标 yaw 角速度 ω*(φ).
 
     ω_z 取 body frame (IMU 陀螺仪所见, 即 policy 所观测). 反向旋转比静止
     受更多惩罚, 因 Gaussian 中心在正目标.
@@ -5845,8 +5847,7 @@ def spin_rate_l1(
     brake_end: float = SPIN_BRAKE_END,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-    """Bootstrap L1: 即使 `spin_rate_track` 的 Gaussian 在远离目标处饱和,
-    仍提供常数梯度朝向目标.
+    """Bootstrap L1: 即使 `spin_rate_track` 的 Gaussian 在远离目标处饱和, 仍提供常数梯度朝向目标.
 
     用 POSITIVE weight (返回值已为负).
     """
@@ -5866,7 +5867,7 @@ def spin_stay_in_place(
     accel_end: float = SPIN_ACCEL_END,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-    """trunk 的 ‖v_xy‖² 成本: 原地旋转, 并消除入场动量.
+    """Trunk 的 ‖v_xy‖² 成本: 原地旋转, 并消除入场动量.
 
     无参考状态 (不同于从 reset 测量的漂移), 所以在 episode 的 5 个周期内有效.
     用 NEGATIVE weight.
@@ -5944,7 +5945,7 @@ def spin_grounded(
     hold_end: float = SPIN_HOLD_END,
     brake_end: float = SPIN_BRAKE_END,
 ) -> torch.Tensor:
-    """spin 期间双刃着地 — 防止 "跳起扭身".
+    """Spin 期间双刃着地 — 防止 "跳起扭身".
 
     swizzle `grounded_reward` 的变体, 不可在此复用: 它按 cmd_x 加权, 而相位
     命令下 cmd_x = cos(2πφ).
@@ -5970,7 +5971,7 @@ def leg_antisymmetry(
     hold_end: float = SPIN_HOLD_END,
     brake_end: float = SPIN_BRAKE_END,
 ) -> torch.Tensor:
-    """spin 期间启动腿剪式 (一前一后).
+    """Spin 期间启动腿剪式 (一前一后).
 
     机器人用镜像 L/R 符号约定: 对称 pose 满足 q_G + q_D ≈ 0 (见
     `leg_symmetry_reward`), 所以剪式满足 q_G ≈ q_D. 返回
@@ -6044,7 +6045,7 @@ def joint_pos_rel_backlash(
     biased: bool = False,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-    """encoder 透过 backlash 铰链读取的 joint_pos_rel.
+    """Encoder 透过 backlash 铰链读取的 joint_pos_rel.
 
     返回 (qpos[servo] + qpos[backlash]) - default[servo]. biased=True 时,
     per-env encoder-calibration bias 施加到 servo 读数 (每个 servo 一个 encoder
@@ -6063,7 +6064,7 @@ def joint_vel_rel_backlash(
     env: "ManagerBasedRlEnv",
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
-    """encoder 透过 backlash 铰链读取的 joint_vel_rel.
+    """Encoder 透过 backlash 铰链读取的 joint_vel_rel.
 
     firmware 从 encoder 位置导出 present_velocity, 所以它也见 backlash 运动:
     qvel[servo] + qvel[backlash].
@@ -6088,8 +6089,7 @@ def joint_vel_rel_backlash(
 
 
 class SitStandCommand(UniformVelocityCommand):
-    """Posture 命令: cmd = [sit_flag, 0, 0], 带 dwell-time 重采样和
-    SLEWED 内部目标 blend.
+    """Posture 命令: cmd = [sit_flag, 0, 0], 带 dwell-time 重采样和 SLEWED 内部目标 blend.
 
     sit_flag ∈ {0.0, 1.0}. 由 command manager 在 cfg 的 resampling_time_range
     (每个 posture 的 dwell time) 上重采样, 并在 episode reset 时重采样.
@@ -6184,7 +6184,7 @@ class SitStandCommandCfg(UniformVelocityCommandCfg):
 
 
 def _posture_blend(env: ManagerBasedRlEnv, command_name: str) -> torch.Tensor:
-    """posture 奖励的目标 blend ∈ [0, 1] (0 = STAND, 1 = SIT).
+    """Posture 奖励的目标 blend ∈ [0, 1] (0 = STAND, 1 = SIT).
 
     用 SitStandCommand 的 slewed ``alpha`` (移动设定点) 当 term 暴露它时;
     否则回退到原始二元 flag.
@@ -6503,7 +6503,7 @@ _FLAT_ZERO = 0.866  # sin(60°): 以上零积分
 
 
 def _lateral_axis_z(quat: torch.Tensor) -> torch.Tensor:
-    """body 的 lateral (y) 轴的 world-z 分量. 0 = flat/矢状."""
+    """Body 的 lateral (y) 轴的 world-z 分量. 0 = flat/矢状."""
     return 2.0 * (quat[:, 2] * quat[:, 3] + quat[:, 0] * quat[:, 1])
 
 
@@ -6613,7 +6613,7 @@ def reset_roulade_state(
     tuck_factor_range: tuple = (0.3, 1.0),
     joint_noise_std: float = 0.0,
 ):
-    """reset 到站立开始或 mid-roll state (反向课程).
+    """Reset 到站立开始或 mid-roll state (反向课程).
 
     站立桶: 直立 (±standing_tilt_max pitch/roll 噪声), 随机 yaw,
     HOME 关节 (reset_robot_joints 留下), z ∈ [standing_z_min, _max].
