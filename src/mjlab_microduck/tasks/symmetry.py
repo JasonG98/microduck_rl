@@ -120,19 +120,19 @@ def microduck_vel_symmetry(
     obs: TensorDict | None,
     actions: torch.Tensor | None,
 ) -> tuple[TensorDict | None, torch.Tensor | None]:
-    """microduck vel env 的左右对称数据增强 / 镜像函数.
+    """Microduck vel env 的左右对称数据增强 / 镜像函数.
 
-沿 batch 维返回 [原始, 镜像] 拼接结果.与 rsl_rl PPO 的 ``symmetry_cfg``
-接口兼容 (use_data_augmentation 和/或 use_mirror_loss).
+    沿 batch 维返回 [原始, 镜像] 拼接结果.与 rsl_rl PPO 的 ``symmetry_cfg``
+    接口兼容 (use_data_augmentation 和/或 use_mirror_loss).
 
-Args:
+    Args:
     env: 向量化环境 (未使用, 仅为接口兼容而保留).
     obs: TensorDict, 含键 ``"policy"`` 与 ``"critic"``, shape ``[B, obs_dim]``.
          只需镜像 actions 时传 ``None``.
     actions: float tensor, shape ``[B, 14]``.
              只需镜像 obs 时传 ``None``.
 
-Returns:
+    Returns:
     元组 ``(aug_obs, aug_actions)``, 每个非 None 输入沿 batch 轴翻倍为
     ``[原始; 镜像]``.
     """

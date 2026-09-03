@@ -22,7 +22,7 @@ def find_latest_run(user_filter: str) -> wandb.apis.public.Run | None:
 
 
 def find_latest_runs(user_filter, task_match, n):
-    """返回最多 *n* 个最新 run, 其 metadata email 包含 *user_filter*, 且 task_id (metadata args[0])
+    """返回最多 *n* 个最新 run, 其 metadata email 包含 *user_filter*, 且 task_id (metadata args[0]).
 
     满足 *task_match*.
 

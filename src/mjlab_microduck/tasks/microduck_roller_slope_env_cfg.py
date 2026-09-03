@@ -49,7 +49,7 @@ PLAY_DIFFICULTY = None
 
 
 def _resolve_play_difficulty():
-    """play 难度: 优先读 SLOPE_PLAY_DIFFICULTY 环境变量, 否则用常量."""
+    """Play 难度: 优先读 SLOPE_PLAY_DIFFICULTY 环境变量, 否则用常量."""
     raw = os.environ.get("SLOPE_PLAY_DIFFICULTY")
     if raw is None:
         return PLAY_DIFFICULTY

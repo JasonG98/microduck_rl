@@ -68,7 +68,7 @@ _PLAY_FACE_DOWN_SHARE = 2.0 / 3.0
 
 
 def _resolve_play_face_up():
-    """play 时仰卧启动比例: 优先读 STANDUP_PLAY_FACE_UP 环境变量, 否则用常量."""
+    """Play 时仰卧启动比例: 优先读 STANDUP_PLAY_FACE_UP 环境变量, 否则用常量."""
     raw = os.environ.get("STANDUP_PLAY_FACE_UP")
     if raw is None:
         return PLAY_FACE_UP
