@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 386" width="100%" height="auto" role="img" aria-label="PPO 三类损失计算" font-family="'SF Pro Text','PingFang SC',system-ui,sans-serif">
+  <rect width="720" height="386" fill="#FFFFFF"/>
+  <style>
+    .title{font-size:16px;font-weight:600;fill:#171717;}
+    .card{fill:#F7F7F8;stroke:#D8D8DE;}
+    .card-f{fill:#F7F7F8;stroke:#4B3FE3;}
+    .ct{font-size:14px;font-weight:500;fill:#171717;}
+    .formula{fill:#EFEFF2;}
+    .fm{font-size:12px;font-weight:500;fill:#171717;font-family:monospace;}
+    .note{font-size:12px;fill:#52525B;}
+    .chip-n{fill:#EFEFF2;stroke:#D8D8DE;}
+    .chip-n-t{font-size:12px;font-weight:500;fill:#52525B;}
+    .chip-b{fill:#F2F7FF;stroke:#4B3FE3;}
+    .chip-b-t{font-size:12px;font-weight:500;fill:#1A1759;}
+    .chip-a{fill:#EAFBF8;stroke:#27D2BF;}
+    .chip-a-t{font-size:12px;font-weight:500;fill:#0F766E;}
+    .combine{fill:#F2F7FF;stroke:#4B3FE3;}
+    .cm{font-size:12px;font-weight:500;fill:#1A1759;font-family:monospace;}
+  </style>
+
+  <text class="title" x="40" y="28">PPO 的三类损失怎么算</text>
+
+  <g>
+    <rect class="card" x="40" y="46" width="640" height="86" rx="12"/>
+    <rect class="chip-n" x="56" y="60" width="52" height="22" rx="11"/>
+    <text class="chip-n-t" x="82" y="75" text-anchor="middle">Critic</text>
+    <text class="ct" x="120" y="74">value_loss —— 让 critic 学会预测回报</text>
+    <rect class="formula" x="56" y="84" width="624" height="30" rx="8"/>
+    <text class="fm" x="68" y="104">max((V − R)² , (V_clip − R)²) · mean</text>
+    <text class="note" x="56" y="124">目标 R = GAE 回报；V_clip 把 V 限制在上次值 ±0.2 内（防抖）</text>
+  </g>
+
+  <g>
+    <rect class="card-f" x="40" y="142" width="640" height="86" rx="12"/>
+    <rect class="chip-b" x="56" y="156" width="52" height="22" rx="11"/>
+    <text class="chip-b-t" x="82" y="171" text-anchor="middle">策略</text>
+    <text class="ct" x="120" y="170" fill="#1A1759">surrogate_loss —— PPO 主目标</text>
+    <rect class="formula" x="56" y="180" width="624" height="30" rx="8"/>
+    <text class="fm" x="68" y="200">max(−A·ratio , −A·clip(ratio, 0.8, 1.2)) · mean</text>
+    <text class="note" x="56" y="220">ratio = exp(新 logP − 旧 logP)；带负号所以为负正常（~−0.03）</text>
+  </g>
+
+  <g>
+    <rect class="card" x="40" y="238" width="640" height="86" rx="12"/>
+    <rect class="chip-a" x="56" y="252" width="52" height="22" rx="11"/>
+    <text class="chip-a-t" x="82" y="267" text-anchor="middle">探索</text>
+    <text class="ct" x="120" y="266">entropy —— 策略随机性</text>
+    <rect class="formula" x="56" y="276" width="624" height="30" rx="8"/>
+    <text class="fm" x="68" y="296">Σ ½(1 + ln 2π) + Σ ln σ</text>
+    <text class="note" x="56" y="316">14 维高斯、σ=1 时 ≈ 19.86；σ 可学习、初始 1.0，越小越确定</text>
+  </g>
+
+  <rect class="combine" x="40" y="334" width="640" height="36" rx="12"/>
+  <text class="cm" x="56" y="357">总损失 = surrogate + 1.0 × value_loss − 0.01 × entropy</text>
+</svg>

@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 274" width="100%" height="auto" role="img" aria-label="track_angular_velocity 与 body_ang_vel 对比" font-family="'SF Pro Text','PingFang SC',system-ui,sans-serif">
+  <rect width="720" height="274" fill="#FFFFFF"/>
+  <style>
+    .title{font-size:16px;font-weight:600;fill:#171717;}
+    .thead{font-size:13px;font-weight:500;fill:#171717;font-family:monospace;}
+    .dim{font-size:12px;fill:#52525B;}
+    .v{font-size:13px;fill:#171717;}
+    .vm{font-size:13px;fill:#171717;font-family:monospace;}
+    .keyfill{fill:#F2F7FF;}
+    .keybar{fill:#4B3FE3;}
+    .keydim{font-size:12px;font-weight:500;fill:#1A1759;}
+    .keyv{font-size:13px;font-weight:500;fill:#1A1759;}
+    .t2{font-size:12px;fill:#0F766E;font-weight:500;}
+    .t3{font-size:12px;fill:#1A1759;font-weight:500;}
+    .rowline{stroke:#E4E4E9;}
+    .hline{stroke:#D8D8DE;}
+    .hdrline{stroke:#D8D8DE;stroke-width:1.5;}
+  </style>
+
+  <text class="title" x="40" y="26">track_angular_velocity vs body_ang_vel</text>
+
+  <line class="hdrline" x1="40" y1="40" x2="680" y2="40"/>
+  <text class="thead" x="48" y="58" font-family="sans-serif" font-size="12px" fill="#52525B">维度</text>
+  <text class="thead" x="172" y="58">track_angular_velocity</text>
+  <text class="thead" x="432" y="58">body_ang_vel</text>
+  <line class="hline" x1="40" y1="66" x2="680" y2="66"/>
+  <line class="vline" x1="160" y1="66" x2="160" y2="258" stroke="#D8D8DE"/>
+  <line class="vline" x1="420" y1="66" x2="420" y2="258" stroke="#D8D8DE"/>
+
+  <g>
+    <text class="dim" x="48" y="90">函数名</text>
+    <text class="vm" x="172" y="90">track_angular_velocity</text>
+    <text class="vm" x="432" y="90">body_angular_velocity_penalty</text>
+    <line class="rowline" x1="40" y1="100" x2="680" y2="100"/>
+  </g>
+
+  <g>
+    <rect class="keyfill" x="40" y="100" width="640" height="42"/>
+    <rect class="keybar" x="40" y="100" width="3" height="42"/>
+    <text class="keydim" x="48" y="124">关注轴 · 作用</text>
+    <text class="keyv" x="172" y="116">yaw（z）—— 转得对不对</text>
+    <text class="t2" x="172" y="136">任务奖励 +2.0</text>
+    <text class="keyv" x="432" y="116">roll / pitch（x, y）—— 稳不稳</text>
+    <text class="t3" x="432" y="136">惩罚正则 −0.05</text>
+    <line class="rowline" x1="40" y1="142" x2="680" y2="142"/>
+  </g>
+
+  <g>
+    <text class="dim" x="48" y="162">坐标系</text>
+    <text class="v" x="172" y="162">机体 body frame</text>
+    <text class="v" x="432" y="162">世界 world frame</text>
+    <line class="rowline" x1="40" y1="172" x2="680" y2="172"/>
+  </g>
+
+  <g>
+    <text class="dim" x="48" y="192">公式</text>
+    <text class="vm" x="172" y="192">exp(−err² / std²)</text>
+    <text class="vm" x="432" y="192">Σ ω_xy²</text>
+    <line class="rowline" x1="40" y1="202" x2="680" y2="202"/>
+  </g>
+
+  <g>
+    <text class="dim" x="48" y="222">权重</text>
+    <text class="v" x="172" y="222">+2.0（高斯跟踪）</text>
+    <text class="v" x="432" y="222">−0.05（L2 惩罚）</text>
+    <line class="rowline" x1="40" y1="232" x2="680" y2="232"/>
+  </g>
+
+  <text class="dim" x="40" y="258">关键区别在“轴”：track 管 yaw（该不该转），body_ang_vel 管 roll/pitch（躯干稳不稳）——互不冲突。</text>
+</svg>

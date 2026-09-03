@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 452" width="100%" height="auto" role="img" aria-label="PPO 训练循环流程图" font-family="'SF Pro Text','PingFang SC',system-ui,sans-serif">
+  <rect width="720" height="452" fill="#FFFFFF"/>
+  <style>
+    .title{font-size:16px;font-weight:600;fill:#171717;}
+    .cap{font-size:12px;fill:#52525B;}
+    .node{fill:#F7F7F8;stroke:#D8D8DE;}
+    .node-f{fill:#F2F7FF;stroke:#4B3FE3;}
+    .nt{font-size:14px;font-weight:500;fill:#171717;}
+    .ntf{font-size:14px;font-weight:500;fill:#1A1759;}
+    .ns{font-size:12px;fill:#52525B;}
+    .nsf{font-size:12px;fill:#4B3FE3;}
+    .badge{fill:#EFEFF2;stroke:#D8D8DE;}
+    .badge-f{fill:#4B3FE3;stroke:#4B3FE3;}
+    .bn{font-size:13px;font-weight:500;fill:#171717;font-family:monospace;}
+    .bnf{font-size:13px;font-weight:500;fill:#FFFFFF;font-family:monospace;}
+    .chip{fill:#EFEFF2;stroke:#D8D8DE;}
+    .chip-f{fill:#E5EAFF;stroke:#4B3FE3;}
+    .ct{font-size:12px;font-weight:500;fill:#171717;font-family:monospace;}
+    .ctf{font-size:12px;font-weight:500;fill:#1A1759;font-family:monospace;}
+    .arr{stroke:#52525B;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;fill:none;}
+    .arr-brand{stroke:#4B3FE3;stroke-width:1.5;stroke-dasharray:5 4;stroke-linecap:round;stroke-linejoin:round;fill:none;}
+    .bot{font-size:12px;fill:#52525B;}
+  </style>
+  <defs>
+    <marker id="m1" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M1 1 L7 4 L1 7 Z" fill="#52525B"/></marker>
+    <marker id="m1b" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M1 1 L7 4 L1 7 Z" fill="#4B3FE3"/></marker>
+  </defs>
+
+  <text class="title" x="40" y="30">PPO 训练循环（1 个迭代）</text>
+  <text class="cap" x="40" y="54">采样 → 算优势 → 学习 → 打日志，然后清空 buffer 再来</text>
+
+  <g>
+    <rect class="node" x="80" y="76" width="560" height="64" rx="12"/>
+    <circle class="badge" cx="112" cy="108" r="15"/>
+    <text class="bn" x="112" y="113" text-anchor="middle">1</text>
+    <text class="nt" x="140" y="102">Collection 采样</text>
+    <text class="ns" x="140" y="124">act() 高斯采样 → env.step → 记录 transition</text>
+    <rect class="chip" x="536" y="94" width="84" height="28" rx="8"/>
+    <text class="ct" x="578" y="112" text-anchor="middle">1536 条</text>
+  </g>
+
+  <g>
+    <rect class="node" x="80" y="168" width="560" height="64" rx="12"/>
+    <circle class="badge" cx="112" cy="200" r="15"/>
+    <text class="bn" x="112" y="205" text-anchor="middle">2</text>
+    <text class="nt" x="140" y="194">compute_returns</text>
+    <text class="ns" x="140" y="216">倒序算 GAE 优势 + 超时续值，然后归一化</text>
+    <rect class="chip" x="536" y="186" width="84" height="28" rx="8"/>
+    <text class="ct" x="578" y="204" text-anchor="middle">γ.99 λ.95</text>
+  </g>
+
+  <g>
+    <rect class="node-f" x="80" y="260" width="560" height="64" rx="12"/>
+    <circle class="badge-f" cx="112" cy="292" r="15"/>
+    <text class="bnf" x="112" y="297" text-anchor="middle">3</text>
+    <text class="ntf" x="140" y="286">Learning 学习</text>
+    <text class="nsf" x="140" y="308">5 epochs × 4 mini-batches，每 batch 一次梯度步</text>
+    <rect class="chip-f" x="536" y="278" width="84" height="28" rx="8"/>
+    <text class="ctf" x="578" y="296" text-anchor="middle">20 次更新</text>
+  </g>
+
+  <g>
+    <rect class="node" x="80" y="352" width="560" height="64" rx="12"/>
+    <circle class="badge" cx="112" cy="384" r="15"/>
+    <text class="bn" x="112" y="389" text-anchor="middle">4</text>
+    <text class="nt" x="140" y="378">Logging 打日志</text>
+    <text class="ns" x="140" y="400">平均 value/surrogate/entropy 损失写 wandb</text>
+    <rect class="chip" x="536" y="370" width="84" height="28" rx="8"/>
+    <text class="ct" x="578" y="388" text-anchor="middle">→ wandb</text>
+  </g>
+
+  <path class="arr" d="M360 140 L360 166" marker-end="url(#m1)"/>
+  <path class="arr" d="M360 232 L360 258" marker-end="url(#m1)"/>
+  <path class="arr" d="M360 324 L360 350" marker-end="url(#m1)"/>
+  <path class="arr-brand" d="M640 384 L676 384 L676 108 L642 108" marker-end="url(#m1b)"/>
+
+  <text class="bot" x="360" y="440" text-anchor="middle">每迭代结束清空 buffer，循环回 Collection —— 每次迭代共 20 次梯度更新</text>
+</svg>
