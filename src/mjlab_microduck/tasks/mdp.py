@@ -5997,11 +5997,11 @@ def leg_antisymmetry(
 # =============================================================================
 # Backlash model — 透过 backlash 的 encoder 关节观测
 # =============================================================================
-# backlash model (robot_allcollisions_backlash.xml) 在每个 servo 关节串联一个
-# 非驱动 ``passive_<joint>_backlash`` 铰链. link 角度为 qpos[servo] + qpos[backlash],
-# 真实 encoder 在 play 的 OUTPUT 侧 — 它读和. 这些 obs 在 backlash 任务中
+# Backlash 模型 (robot_groundcontact_backlash.xml) 在每个 servo 关节串联一个
+# 未驱动 ``passive_<joint>_backlash`` 铰链. link 角度为 qpos[servo] + qpos[backlash],
+# 真实 encoder 位于 play 的 OUTPUT 侧 — 它读的就是和. 这些 obs 在 backlash 任务中
 # 替换 joint_pos_rel / joint_vel_rel (见 tasks/backlash.py), 使 policy 看到的
-# 正是 runtime 将喂的. asset_cfg regex 应只选 servo 关节 (常用 ``^(?!passive_).*``).
+# 正是 runtime 将喂给它的内容. asset_cfg regex 应只选 servo 关节 (常用 ``^(?!passive_).*``).
 
 
 def _backlash_encoder_ids(

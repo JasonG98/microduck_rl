@@ -155,9 +155,9 @@ def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         num_slots=1,
     )
 
-    # 头部-地面接触 — 翻滚的枢轴信号. jaw_soft 是承载头部碰撞 geom
+# 头部-地面接触 — 翻滚的枢轴信号. jaw_soft 是承载头部碰撞 geom
     # (top_head_shell = 平坦顶部, jaw, bottom_head_shell) 的 body, 在
-    # robot_allcollisions.xml 中. 名称是关键载荷:
+    # robot_groundcontact.xml 中. 名称是关键载荷:
     # _update_roulade_accum 读取它用于过头顶锁.
     head_ground_cfg = ContactSensorCfg(
         name="head_ground_contact",

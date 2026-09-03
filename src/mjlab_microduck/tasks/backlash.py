@@ -3,21 +3,19 @@
 ``make_backlash_variant(cfg)`` 将任意 microduck env cfg 转换为对应的
 backlash 版本 (task id ``Mjlab-<Task>-<Flat|Rough>-Backlash-MicroDuck``):
 
-1. Robot → 匹配的 backlash 机器人 cfg (与 14 个 servo 关节各串联一个
-   非驱动的 ``passive_<joint>_backlash`` 铰链, ±1° 间隙), 由
-   BacklashEncoderBamActuator 驱动, 其固件 PD 闭合于穿越 backlash 的
-   编码器读数 — 与真实舵机一致, 编码器位于齿轮间隙的输出侧.传入
-   与基础任务模型镜像的 robot cfg: Velocity 用
+1. Robot → 匹配的 backlash 机器人 cfg (与 14 个 servo 关节各串联一个未驱动的
+   ``passive_<joint>_backlash`` 铰链, ±1° 间隙), 由 BacklashEncoderBamActuator
+   驱动, 其固件 PD 闭合于穿越 backlash 的编码器读数 — 与真实舵机一致, 编码器
+   位于齿轮间隙的输出侧. 传入与基础任务模型镜像的 robot cfg: Velocity 用
    MICRODUCK_WALK_BACKLASH_ROBOT_CFG (robot_walk_backlash.xml), 默认
    MICRODUCK_BACKLASH_ROBOT_CFG 用于 VelStand/StandUp
-   (robot_allcollisions_backlash.xml).
-2. joint_pos / joint_vel obs → joint_pos_rel_backlash /
-   joint_vel_rel_backlash: 策略观测 qpos[servo] + qpos[backlash]
-   (编码器视角), 保留编码器偏差 DR 路径 (``biased`` 参数) 不变.
-   obs 和 action 维度不变 (仍为 14 个关节), runtime/export 无需改动.
-3. dof_pos_limits reward 仅作用于 servo 关节: backlash 关节一生都
-   紧贴在 ±1° 限位 (这正是 backlash 的本意), 否则会持续喂入一个
-   永久的超出软限位惩罚.
+   (robot_groundcontact_backlash.xml).
+2. joint_pos / joint_vel obs → joint_pos_rel_backlash / joint_vel_rel_backlash:
+   策略观测 qpos[servo] + qpos[backlash] (编码器视角), 保留编码器偏差 DR 路径
+   (``biased`` 参数) 不变. obs 和 action 维度不变 (仍为 14 个关节), runtime/export
+   无需改动.
+3. dof_pos_limits reward 仅作用于 servo 关节: backlash 关节一生都紧贴在 ±1°
+   限位 (这正是 backlash 的本意), 否则会持续喂入一个永久的超出软限位惩罚.
 
 其他一切 (rewards, DR events, curricula) 原样保留 — backlash 关节上的
 ``passive_`` 前缀意味着每个既有的 ``^(?!passive_).*`` 正则 (actuators,
