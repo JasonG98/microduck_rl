@@ -38,6 +38,7 @@ uv run play Mjlab-Velocity-Flat-MicroDuck --wandb-run-path <entity/project/run_i
 
 # 导出为 ONNX 用于部署
 uv run scripts/export.py Mjlab-Velocity-Flat-MicroDuck --wandb-run-path <...>
+uv run publish --onnx output.onnx --repo <user>/microduck-<name> --kind episodic --duration-s 4.0   # share it (see "Publishing a policy")
 
 # 在 CPU MuJoCo 中用键盘驱动导出的策略
 uv run scripts/infer_policy.py --walking output.onnx
@@ -87,6 +88,9 @@ uv run scripts/infer_policy.py --walking walk.onnx --standing stand.onnx \
 
 键盘驱动 (速度命令, `G` 拾取, `Y` 坐/站, `R` 前滚翻,
 `K`/`L` 踢球); `--debug`, `--save-csv`, `--record` 支持 sim2real 对比.
+舵机使用与策略训练相同的 BAM M6 XL330 模型仿真 (电压控制 + 负载相关摩擦,
+通过 `bam.mujoco.MujocoController`); `--vin` / `--vin-drop-gain` / `--kp-fw`
+将训练 DR 范围固定为单一取值, `--no-bam` 回退到 XML PD 执行器.
 
 ### 齿隙变体
 
@@ -118,9 +122,10 @@ MJCF 模型位于 `src/mjlab_microduck/robot/microduck/`, 由
 
 | XML | 使用者 |
 |---|---|
-| `robot_walk.xml` | Velocity (去掉躯干/头部碰撞 — 摔倒代价低) |
-| `robot_allcollisions.xml` | VelStand, StandUp, SitStand, GroundPick, BallKick, Roulade (身体可以物理上躺在地面) |
-| `robot_allcollisions_rollers.xml` | Roller 任务 (被动轮) |
+| `robot_walk.xml` | Velocity (去掉躯干/头部碰撞 - 摔倒代价低) |
+| `robot_groundcontact.xml` | VelStand, StandUp, SitStand, GroundPick, BallKick, Roulade (为接触地面的部位精选碰撞集 - 身体可以物理上躺在地面; 原名 `robot_allcollisions.xml`) |
+| `robot_groundcontact_rollers.xml` | Roller 任务 (被动轮) |
+| `robot_allcollisions.xml` | 真正的全碰撞模型 - 每个部件都有碰撞几何体. 尚无任务使用它 |
 | `robot_*_backlash.xml` | Backlash 任务变体 (由 `add_backlash.py` 生成) |
 
 `scene*.xml` 文件用地板 + 关键帧 (STAND/SIT/FOLD) 包装机器人,
@@ -164,6 +169,62 @@ src/mjlab_microduck/
 
 [AGENTS.md](AGENTS.md) 记录了 env 构建工作流和整个项目过程中积累的奖励设计
 规则 (同样面向在此仓库工作的 AI 编程 agent).
+
+## 发布策略
+
+`uv run publish` 以机器人守护进程加载的形态把策略放到 Hugging Face Hub 上:
+一个已烘焙观测归一化器的 `policy.onnx`, 一个遵循
+[microduck 策略清单](https://github.com/pollen-robotics/microduck/blob/main/docs/policy-manifest.md)
+schema 2 的 `manifest.json`, 以及一个说明如何运行的 README. 任何拥有
+microduck 的人都可用一条命令安装它, 无需发布新版守护进程.
+
+```bash
+# 从 wandb run 导出 - 走唯一的安全导出路径, 然后上传
+uv run publish --task Mjlab-PoliteBow-Flat-MicroDuck \
+    --wandb-run-path <entity/project/run_id> --checkpoint 3000 \
+    --repo <user>/microduck-polite-bow --kind episodic --duration-s 4.0 \
+    --description "Bows from a two-foot stand and comes back up."
+
+# 从已导出的 ONNX 获取 (会校验, 不会重新导出)
+uv run publish --onnx output.onnx --repo <user>/microduck-flamingo \
+    --kind perpetual --unwind-s 1.5 --twist-help "[flag, side, 0]"
+
+# 为某个槽位新增步态
+uv run publish --onnx output.onnx --repo <user>/microduck-my-walk --kind perpetual --slot walk
+
+# 预演上传内容而不触碰 Hub
+uv run publish --onnx output.onnx --repo <user>/microduck-bow --kind episodic --duration-s 4.0 --dry-run
+```
+
+然后在机器人上:
+
+```bash
+sudo robotctl policy add polite-bow <user>/microduck-polite-bow   # episodic: 时长取自清单
+sudo robotctl policy add flamingo <user>/microduck-flamingo --hold 5   # 保持姿态: 由你决定时长
+sudo robotctl policy load walk <user>/microduck-my-walk                # 步态: 装入 walk 槽位
+robotctl robot do polite-bow
+```
+
+`--kind` 表示什么, 以及各自需要什么:
+
+- **episodic** - 运行 `--duration-s` 指定的时长, 然后回到站立姿态
+  (踢球, 前滚翻, 鞠躬). 若需按住按钮重复, 加 `--chain`.
+- **perpetual** - 运行直到被叫停. 两种形态:
+  - **步态** (新的 walk 或 stand): 加 `--slot walk` (或 `stand`) 即可;
+    使用者用 `robotctl policy load walk <repo>` 安装.
+  - **保持姿态** (如 flamingo): 给 `--unwind-s`, 表示守护进程在交还
+    步态之前驱动空闲 twist (`--idle`, 默认全零) 的时长, 免得机器人单脚被放开.
+    使用者以 `policy add ... --hold <seconds>` 一次性运行它.
+
+在任何内容上传之前, `publish` 会检查图是否为 `[1,61] -> [1,14]`
+(拒绝 51 维遗留策略并给出提示), 在合理输入上运行并拒绝 NaN 或恒定输出,
+从 git 和 wandb 填充 `training` 块 (task, commit, branch, dirty 标志, run,
+checkpoint), 并且除非带 `--force`, 否则拒绝覆盖仓库里已有的 `.onnx`.
+仓库默认创建为私有; `--no-private` 转为公开, `--tag v1` 打版本标签.
+
+只有恒定命令的策略才能这样发布. 相位驱动的动作 (地面拾取) 和姿态标志的
+坐/站切换由守护进程自身驱动, 位于官方集合
+`pollen-robotics/microduck-policies` 中.
 
 ## 测试
 

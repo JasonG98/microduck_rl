@@ -17,10 +17,10 @@
 mjlab 侧完成 (BacklashEncoderBamActuatorCfg + joint_pos/vel_rel_backlash 观测).
 
 用作 onshape-to-robot 配置的最后一个 post_import_command
-(见 config_mjcf_allcollisions_backlash.json), 但也可独立用于任何
+(见 config_mjcf_groundcontact_backlash.json), 但也可独立用于任何
 已导出的机器人 xml:
 
-    python3 add_backlash.py robot_allcollisions_backlash.xml --backlash-deg 2.0
+    python3 add_backlash.py robot_groundcontact_backlash.xml --backlash-deg 2.0
 
 ``--backlash-deg`` 是总的峰峰值间隙 (按住 servo 摇动 horn 时
 测得的值); 关节范围对称 ±deg/2.

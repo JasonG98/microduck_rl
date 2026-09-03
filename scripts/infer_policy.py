@@ -27,9 +27,87 @@ MICRODUCK_XML = "src/mjlab_microduck/robot/microduck/scene.xml"
 MICRODUCK_ROLLERS_XML = "src/mjlab_microduck/robot/microduck/scene_rollers.xml"
 MICRODUCK_BALL_XML = "src/mjlab_microduck/robot/microduck/scene_ball.xml"
 
+# BAM M6 默认值 - 必须与 src/mjlab_microduck/robot/microduck_constants.py 中的
+# `_BAM_ACTUATOR_KWARGS` 保持一致 (每个策略在 warp 里都基于这个执行器训练).
+# 不从这里导入: 该模块会拖入 mjlab/torch/warp (~16 s 导入), 而这只是个 CPU 排演脚本.
+# 由 tests/test_infer_policy_bam.py 锁定.
+BAM_MOTOR_NAME = "xl330"
+BAM_MODEL = "m6"
+BAM_KP_FW = 200.0                 # microduck 保留的固件刚度
+BAM_VIN_RANGE = (6.5, 8.2)        # 训练中 per-env 的电池电压 DR
+BAM_VIN_DROP_GAIN_RANGE = (0.0, 0.2)  # 负载相关的电压跌落 V_drop = gain * sum|tau|
+BAM_VIN_MIN = 6.0                 # 跌落后的有效电压下限
+BAM_MAX_CURRENT = None            # 训练时没有固件电流限制器
+# 刚性关节摩擦约束, 来自 bam.mjlab.BamActuator
+# (训练时 stiff_frictionloss=True): warp 没有 noslip 求解器, 所以 BAM 会
+# 加固 frictionloss 使静态保持的关节不会爬行. 这里镜像它, 让 CPU 和 warp
+# 按相同方式施加相同的摩擦预算.
+BAM_STIFF_SOLREF_FRICTION = (-5.0e4, -2.0e2)
+BAM_STIFF_SOLIMP_FRICTION = (0.99, 0.9999, 0.001, 0.5, 2.0)
+
+
+def load_bam_model(kp_fw: float, vin: float, max_current):
+    """构建 BAM M6 模型 + XL330 电压控制执行器."""
+    from bam.model import load_model
+    bam_model = load_model(motor_name=BAM_MOTOR_NAME, model=BAM_MODEL)
+    bam_model.actuator.kp = kp_fw
+    bam_model.actuator.vin = vin
+    bam_model.actuator.max_current = max_current if (max_current and max_current > 0) else None
+    return bam_model
+
+
+def load_mujoco_with_bam(xml_path: str, bam_model, timestep: float, vin_drop_gain, vin_min):
+    """加载场景并把每个非 passive 执行器交给 bam.mujoco.MujocoController.
+
+    镜像 bam.mjlab.BamActuator.edit_spec (训练时 warp 所做的工作):
+    position 执行器 -> 带电压限制 forcerange 的 torque 电机,
+    关节 damping/frictionloss 清零 (BAM 每一步都会重写它们), 刚性摩擦约束.
+    Armature 由 MujocoController 设置在 dof 上.
+    返回 (model, data, bam_ctrl, actuator_names).
+    """
+    from bam.mujoco import MujocoController
+
+    kt = bam_model.kt.value
+    R = bam_model.R.value
+    force_limit = bam_model.actuator.vin * kt / R
+
+    spec = mujoco.MjSpec.from_file(xml_path)
+    names = []
+    for act in spec.actuators:
+        tgt = act.target
+        tgt_name = tgt.name if hasattr(tgt, "name") else str(tgt)
+        if tgt_name.startswith("passive_"):
+            continue
+        act.set_to_motor()
+        act.forcelimited = True
+        act.forcerange = (-force_limit, force_limit)
+        act.ctrllimited = False
+        act.gear = [1.0, 0, 0, 0, 0, 0]
+        names.append(act.name)
+        for joint in spec.joints:
+            if joint.name == tgt_name:
+                joint.damping = np.zeros((3, 1))  # MjsJoint expects a (3,1) array
+                joint.frictionloss = 0.0
+                joint.solref_friction = BAM_STIFF_SOLREF_FRICTION
+                joint.solimp_friction = BAM_STIFF_SOLIMP_FRICTION
+                break
+
+    model = spec.compile()
+    model.opt.timestep = timestep
+    data = mujoco.MjData(model)
+    bam_ctrl = MujocoController(bam_model, names, model, data,
+                                vin_drop_gain=vin_drop_gain, vin_min=vin_min)
+    print(f"BAM {BAM_MODEL} 执行器, 共 {len(names)} 个关节: kt={kt:.4f} R={R:.4f} "
+          f"vin={bam_model.actuator.vin:.2f}V kp_fw={bam_model.actuator.kp:.0f} "
+          f"vin_drop_gain={vin_drop_gain} vin_min={vin_min} "
+          f"max_current={bam_model.actuator.max_current} forcerange=+/-{force_limit:.3f}Nm "
+          f"armature={bam_model.actuator.get_extra_inertia():.2e}")
+    return model, data, bam_ctrl, names
+
+
 # 躯干姿态命令常量 (必须与训练常量一致)
-BODY_CMD_MAX_Z = 0.03  # ±30 mm
-BODY_CMD_MAX_XY = 0.02  # ±20 mm
+BODY_CMD_MAX_Z = 0.03              # ±30 mm
+BODY_CMD_MAX_XY = 0.02             # ±20 mm
 BODY_CMD_MAX_ANGLE = math.radians(30)  # ±30°
 
 # 踢球行为的球初始放置 (必须与 microduck_ball_kick_env_cfg 的
@@ -88,7 +166,7 @@ class TerminalInput:
 
     def __enter__(self):
         if not self.enabled:
-            print("WARNING: stdin is not a TTY — keyboard control disabled")
+            print("WARNING: 标准输入不是 TTY - 键盘控制已禁用")
             return self
         self._old_attrs = termios.tcgetattr(self._fd)
         tty.setcbreak(self._fd)
@@ -139,30 +217,16 @@ class TerminalInput:
 class PolicyInference:
     """在 MuJoCo 模型中运行 ONNX 策略, 支持键盘驱动的命令切换."""
 
-    def __init__(
-        self,
-        model,
-        data,
-        walking_onnx_path=None,
-        action_scale=1.0,
-        delay_min_lag=0,
-        delay_max_lag=0,
-        standing_onnx_path=None,
-        switch_threshold=0.05,
-        use_projected_gravity=False,
-        ground_pick_onnx_path=None,
-        ground_pick_period=4.0,
-        sit_onnx_path=None,
-        new_cmd_obs=False,
-        slope_onnx_path=None,
-        sitstand_onnx_path=None,
-        kick_left_onnx_path=None,
-        kick_right_onnx_path=None,
-        roulade_onnx_path=None,
-        kick_duration=3.0,
-        roulade_duration=2.0,
-    ):
-        """用 MuJoCo 模型和 ONNX 策略初始化推理运行器."""
+    def __init__(self, model, data, walking_onnx_path=None, action_scale=1.0, bam_ctrl=None,
+                 delay_min_lag=0, delay_max_lag=0,
+                 standing_onnx_path=None, switch_threshold=0.05,
+                 use_projected_gravity=False, ground_pick_onnx_path=None, ground_pick_period=4.0,
+                 sit_onnx_path=None, new_cmd_obs=False, slope_onnx_path=None,
+                 sitstand_onnx_path=None,
+                 kick_left_onnx_path=None, kick_right_onnx_path=None,
+                 roulade_onnx_path=None,
+                 kick_duration=3.0, roulade_duration=2.0):
+        self.bam_ctrl = bam_ctrl  # bam.mujoco.MujocoController (None 表示遗留 position 执行器)
         self.model = model
         self.data = data
         self.action_scale = action_scale
@@ -179,12 +243,12 @@ class PolicyInference:
         self.walking_session = None
         self.default_gait_period_from_onnx = None
         if walking_onnx_path:
-            print(f"Loading walking policy from: {walking_onnx_path}")
+            print(f"正在加载 walking 策略: {walking_onnx_path}")
             self.walking_session = ort.InferenceSession(walking_onnx_path)
             w_input_shape = self.walking_session.get_inputs()[0].shape
             w_output_shape = self.walking_session.get_outputs()[0].shape
-            print(f"Walking policy input: {self.walking_session.get_inputs()[0].name}, shape: {w_input_shape}")
-            print(f"Walking policy output: {self.walking_session.get_outputs()[0].name}, shape: {w_output_shape}")
+            print(f"walking 策略输入: {self.walking_session.get_inputs()[0].name}, shape: {w_input_shape}")
+            print(f"walking 策略输出: {self.walking_session.get_outputs()[0].name}, shape: {w_output_shape}")
 
             # 尝试从 ONNX metadata 读取步态周期
             try:
@@ -194,21 +258,21 @@ class PolicyInference:
                     and "gait_period" in model_metadata.custom_metadata_map
                 ):
                     self.default_gait_period_from_onnx = float(model_metadata.custom_metadata_map["gait_period"])
-                    print(f"Found gait period in ONNX metadata: {self.default_gait_period_from_onnx:.4f}s")
+                    print(f"在 ONNX metadata 中找到步态周期: {self.default_gait_period_from_onnx:.4f}s")
             except Exception as e:
-                print(f"Could not read gait period from ONNX metadata: {e}")
+                print(f"无法从 ONNX metadata 读取步态周期: {e}")
 
         # 加载 standing 策略
         self.standing_session = None
         if standing_onnx_path:
-            print(f"\nLoading standing policy from: {standing_onnx_path}")
+            print(f"\n正在加载 standing 策略: {standing_onnx_path}")
             self.standing_session = ort.InferenceSession(standing_onnx_path)
             s_input_shape = self.standing_session.get_inputs()[0].shape
             s_output_shape = self.standing_session.get_outputs()[0].shape
-            print(f"Standing policy input: {self.standing_session.get_inputs()[0].name}, shape: {s_input_shape}")
-            print(f"Standing policy output: {self.standing_session.get_outputs()[0].name}, shape: {s_output_shape}")
+            print(f"standing 策略输入: {self.standing_session.get_inputs()[0].name}, shape: {s_input_shape}")
+            print(f"standing 策略输出: {self.standing_session.get_outputs()[0].name}, shape: {s_output_shape}")
             if self.walking_session:
-                print(f"Policy switching threshold: {switch_threshold} (vel command magnitude)")
+                print(f"策略切换阈值: {switch_threshold} (速度命令幅度)")
 
         # 加载 ground pick 策略
         self.ground_pick_session = None
@@ -216,10 +280,10 @@ class PolicyInference:
         self.ground_pick_phase = 0.0
         self.ground_pick_period = ground_pick_period
         if ground_pick_onnx_path:
-            print(f"\nLoading ground pick policy from: {ground_pick_onnx_path}")
+            print(f"\n正在加载 ground pick 策略: {ground_pick_onnx_path}")
             self.ground_pick_session = ort.InferenceSession(ground_pick_onnx_path)
             gp_input_shape = self.ground_pick_session.get_inputs()[0].shape
-            print(f"Ground pick policy input shape: {gp_input_shape}")
+            print(f"ground pick 策略输入 shape: {gp_input_shape}")
 
         # 加载 sit 策略. 两种变体共享 Y 键和 self.sit_session:
         #  - --sit (is_sitstand=False): 旧的单向 sit 策略. 在零 twist 命令下
@@ -233,27 +297,27 @@ class PolicyInference:
         if sit_onnx_path and sitstand_onnx_path:
             raise ValueError("Provide only one of --sit / --sitstand")
         if sit_onnx_path:
-            print(f"\nLoading sit policy from: {sit_onnx_path}")
+            print(f"\n正在加载 sit 策略: {sit_onnx_path}")
             self.sit_session = ort.InferenceSession(sit_onnx_path)
             sit_input_shape = self.sit_session.get_inputs()[0].shape
-            print(f"Sit policy input shape: {sit_input_shape}")
+            print(f"sit 策略输入 shape: {sit_input_shape}")
         elif sitstand_onnx_path:
             if not self.new_cmd_obs:
-                raise ValueError("--sitstand policies use the unified 13D command obs (61D); run with --new-cmd-obs")
-            print(f"\nLoading sitstand policy from: {sitstand_onnx_path}")
+                raise ValueError("--sitstand 策略使用统一的 13D 命令 obs (61D); 需运行 --new-cmd-obs")
+            print(f"\n正在加载 sitstand 策略: {sitstand_onnx_path}")
             self.sit_session = ort.InferenceSession(sitstand_onnx_path)
             self.is_sitstand = True
             ss_input_shape = self.sit_session.get_inputs()[0].shape
-            print(f"Sitstand policy input shape: {ss_input_shape}")
+            print(f"sitstand 策略输入 shape: {ss_input_shape}")
 
         # 加载 slope 策略 (被动下滑, 在零 twist 命令下运行)
         self.slope_session = None
         self.slope_mode = False
         if slope_onnx_path:
-            print(f"\nLoading slope policy from: {slope_onnx_path}")
+            print(f"\n正在加载 slope 策略: {slope_onnx_path}")
             self.slope_session = ort.InferenceSession(slope_onnx_path)
             sl_input_shape = self.slope_session.get_inputs()[0].shape
-            print(f"Slope policy input shape: {sl_input_shape}")
+            print(f"slope 策略输入 shape: {sl_input_shape}")
 
         # 情节式行为策略 (左/右踢球, roulade). 三者都使用统一的 61D obs
         # 布局, 配以全零 13D 命令 (训练时 twist 强制为 ~0, head/body 槽
@@ -272,20 +336,20 @@ class PolicyInference:
                 continue
             if not self.new_cmd_obs:
                 raise ValueError(
-                    f"--{name.replace('_', '-')} policies use the unified 13D command obs (61D); run with --new-cmd-obs"
+                    f"--{name.replace('_', '-')} 策略使用统一的 13D 命令 obs (61D); 需运行 --new-cmd-obs"
                 )
-            print(f"\nLoading {name} policy from: {path}")
+            print(f"\n正在加载 {name} 策略: {path}")
             self.behavior_sessions[name] = ort.InferenceSession(path)
             self.behavior_durations[name] = duration
             print(
-                f"{name} policy input shape: {self.behavior_sessions[name].get_inputs()[0].shape}"
-                f"  (auto-return after {duration:.1f}s)"
+                f"{name} 策略输入 shape: {self.behavior_sessions[name].get_inputs()[0].shape}"
+                f"  ({duration:.1f}s 后自动返回)"
             )
 
         # 校验至少加载了一个策略. sitstand 策略可以单独运行
         # (在 flag=0 时保持站立), 不像旧的单向 sit 策略.
         if not self.walking_session and not self.standing_session and not self.is_sitstand:
-            raise ValueError("At least one of --walking, --standing or --sitstand must be provided")
+            raise ValueError("--walking, --standing 或 --sitstand 中至少要提供一个")
 
         # 确定初始活动 session 和策略
         if self.walking_session:
@@ -319,9 +383,9 @@ class PolicyInference:
             self.ball_qpos_adr = None
             self.ball_qvel_adr = None
 
-        print("Sensors found:")
+        print("找到的传感器:")
         print(f"  imu_ang_vel: id={self.imu_ang_vel_id}")
-        print("Body IDs:")
+        print("Body 的 id:")
         print(f"  trunk_base: id={self.trunk_base_id}")
 
         # 关节信息
@@ -335,9 +399,9 @@ class PolicyInference:
 
         # 策略的默认姿态 (腿部弯曲)
         self.default_pose = DEFAULT_POSE[: self.n_joints]
-        print(f"Number of actuators: {self.n_joints}")
-        print(f"Default pose: {self.default_pose}")
-        print(f"Action scale: {self.action_scale}")
+        print(f"执行器数量: {self.n_joints}")
+        print(f"默认姿态: {self.default_pose}")
+        print(f"动作缩放: {self.action_scale}")
 
         # 上一个动作 (用于观测历史)
         self.last_action = np.zeros(self.n_joints, dtype=np.float32)
@@ -388,11 +452,11 @@ class PolicyInference:
             self.action_buffer = [np.zeros(self.n_joints, dtype=np.float32) for _ in range(buffer_size)]
             self.buffer_index = 0
             self.current_lag = np.random.randint(self.delay_min_lag, self.delay_max_lag + 1)
-            print("\nActuator delay enabled:")
-            print(f"  Min lag: {self.delay_min_lag} timesteps")
-            print(f"  Max lag: {self.delay_max_lag} timesteps")
-            print(f"  Sampled lag: {self.current_lag} timesteps")
-            print(f"  Buffer size: {buffer_size}")
+            print("\n执行器延迟已启用:")
+            print(f"  最小延迟: {self.delay_min_lag} 个时间步")
+            print(f"  最大延迟: {self.delay_max_lag} 个时间步")
+            print(f"  采样的延迟: {self.current_lag} 个时间步")
+            print(f"  缓冲区大小: {buffer_size}")
         else:
             self.action_buffer = None
             self.current_lag = 0
@@ -472,7 +536,7 @@ class PolicyInference:
         if new_policy != self.current_policy:
             self.current_policy = new_policy
             self.ort_session = self.standing_session if new_policy == "standing" else self.walking_session
-            print(f"Switched to {self.current_policy} policy (vel magnitude: {magnitude:.3f})")
+            print(f"切换到 {self.current_policy} 策略 (速度幅度: {magnitude:.3f})")
             self._update_command()
 
     def set_vel_cmd(self, lin_vel_x=0.0, lin_vel_y=0.0, ang_vel_z=0.0):
@@ -480,43 +544,43 @@ class PolicyInference:
         self.vel_cmd = np.array([lin_vel_x, lin_vel_y, ang_vel_z], dtype=np.float32)
         self._update_policy_session()
         self._update_command()
-        print(f"Vel cmd: [{lin_vel_x:.2f}, {lin_vel_y:.2f}, {ang_vel_z:.2f}] [{self.current_policy}]")
+        print(f"速度命令: [{lin_vel_x:.2f}, {lin_vel_y:.2f}, {ang_vel_z:.2f}] [{self.current_policy}]")
 
     def toggle_body_pose_mode(self):
         """开关躯干姿态控制模式."""
         self.body_pose_mode = not self.body_pose_mode
         if self.body_pose_mode:
-            print("Body pose mode: ON")
-            print(f"  UP/DOWN: Δz ±{self.body_cmd_step_z * 1000:.0f}mm  (max ±{BODY_CMD_MAX_Z * 1000:.0f}mm)")
+            print("躯干姿态模式: 开启")
+            print(f"  UP/DOWN: Δz ±{self.body_cmd_step_z * 1000:.0f}mm  (最大 ±{BODY_CMD_MAX_Z * 1000:.0f}mm)")
             print(
-                f"  LEFT/RIGHT: Δpitch ±{math.degrees(self.body_cmd_step_angle):.0f}°  (max ±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)"
+                f"  LEFT/RIGHT: Δpitch ±{math.degrees(self.body_cmd_step_angle):.0f}°  (最大 ±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)"
             )
             print(
-                f"  A/E: Δroll ±{math.degrees(self.body_cmd_step_angle):.0f}°  (max ±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)"
+                f"  A/E: Δroll ±{math.degrees(self.body_cmd_step_angle):.0f}°  (最大 ±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)"
             )
             if self.new_cmd_obs:
                 print(
-                    f"  Z/S: Δyaw ±{math.degrees(self.body_cmd_step_angle):.0f}°  (max ±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)"
+                    f"  Z/S: Δyaw ±{math.degrees(self.body_cmd_step_angle):.0f}°  (最大 ±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)"
                 )
-            print("  SPACE: reset body pose to zero")
+            print("  SPACE: 重置躯干姿态为零")
             self._print_body_cmd()
         else:
-            print("Body pose mode: OFF")
+            print("躯干姿态模式: 关闭")
 
     def toggle_slope_mode(self):
         """开关 slope 策略模式 (被动下滑, 零 twist 命令)."""
         if self.slope_session is None:
-            print("Slope unavailable: no --slope policy loaded")
+            print("slope 不可用: 未加载 --slope 策略")
             return
         if self.behavior_mode is not None:
-            print(f"Cannot toggle slope mode during {self.behavior_mode}")
+            print(f"{self.behavior_mode} 期间无法切换 slope 模式")
             return
         self.slope_mode = not self.slope_mode
         if self.slope_mode:
             self.ort_session = self.slope_session
             self.current_policy = "slope"
             self.set_vel_cmd(0.0, 0.0, 0.0)  # 被动下滑: 零命令
-            print("Slope mode: ON (passive descent)")
+            print("slope 模式: 开启 (被动下滑)")
         else:
             self.vel_cmd = np.zeros(3, dtype=np.float32)
             if self.walking_session:
@@ -526,19 +590,19 @@ class PolicyInference:
                 self.current_policy = "standing"
                 self.ort_session = self.standing_session
             self._update_command()
-            print("Slope mode: OFF")
+            print("slope 模式: 关闭")
 
     def _print_body_cmd(self):
         if self.new_cmd_obs:
             x, y, z, roll, pitch, yaw = self.body_cmd
             print(
-                f"Body cmd: x={x * 1000:5.1f}mm  y={y * 1000:5.1f}mm  z={z * 1000:5.1f}mm  "
+                f"躯干命令: x={x * 1000:5.1f}mm  y={y * 1000:5.1f}mm  z={z * 1000:5.1f}mm  "
                 f"roll={math.degrees(roll):5.1f}°  pitch={math.degrees(pitch):5.1f}°  "
                 f"yaw={math.degrees(yaw):5.1f}°"
             )
         else:
             print(
-                f"Body cmd: z={self.body_cmd[0] * 1000:.1f}mm  "
+                f"躯干命令: z={self.body_cmd[0] * 1000:.1f}mm  "
                 f"pitch={math.degrees(self.body_cmd[1]):.1f}°  "
                 f"roll={math.degrees(self.body_cmd[2]):.1f}°"
             )
@@ -569,7 +633,7 @@ class PolicyInference:
         """从 MuJoCo 传感器读取原始加速度计读数."""
         sensor_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SENSOR, "imu_accel")
         if sensor_id < 0:
-            raise ValueError("Sensor 'imu_accel' not found in model")
+            raise ValueError("在模型中未找到传感器 'imu_accel'")
 
         sensor_adr = self.model.sensor_adr[sensor_id]
         accel_raw = self.data.sensordata[sensor_adr : sensor_adr + 3].copy().astype(np.float32)
@@ -636,22 +700,22 @@ class PolicyInference:
         完成后自动返回 walking.
         """
         if self.ground_pick_session is None:
-            print("Ground pick unavailable: no --ground-pick policy loaded")
+            print("ground pick 不可用: 未加载 --ground-pick 策略")
             return
         if self.ground_pick_mode:
-            print("Ground pick already in progress")
+            print("ground pick 已在执行中")
             return
         if self.sit_mode:
-            print("Cannot ground pick while sitting (press Y to stand up first)")
+            print("坐下时无法 ground pick (请先按 Y 起立)")
             return
         if self.behavior_mode is not None:
-            print(f"Cannot ground pick during {self.behavior_mode}")
+            print(f"{self.behavior_mode} 期间无法 ground pick")
             return
         self.ground_pick_mode = True
         self.ground_pick_phase = 0.0
         self.ort_session = self.ground_pick_session
         self.current_policy = "ground_pick"
-        print(f"Ground pick: started (period={self.ground_pick_period:.1f}s)")
+        print(f"ground pick: 已启动 (周期={self.ground_pick_period:.1f}s)")
 
     def _end_ground_pick(self):
         """在一个 ground pick 周期完成后切回."""
@@ -664,7 +728,7 @@ class PolicyInference:
             self.current_policy = "standing"
             self.ort_session = self.standing_session
         self._update_command()
-        print(f"Ground pick: done → back to {self.current_policy}")
+        print(f"ground pick: 完成 → 切回 {self.current_policy}")
 
     def update_ground_pick_phase(self, dt: float):
         """推进 ground pick 相位; 完成一个完整周期后自动退出."""
@@ -689,19 +753,19 @@ class PolicyInference:
         """
         session = self.behavior_sessions.get(name)
         if session is None:
-            print(f"{name} unavailable: no --{name.replace('_', '-')} policy loaded")
+            print(f"{name} 不可用: 未加载 --{name.replace('_', '-')} 策略")
             return
         if self.behavior_mode is not None:
-            print(f"Cannot start {name}: {self.behavior_mode} already in progress")
+            print(f"无法启动 {name}: {self.behavior_mode} 已在执行中")
             return
         if self.ground_pick_mode:
-            print(f"Cannot start {name} during ground pick")
+            print(f"ground pick 期间无法启动 {name}")
             return
         if self.sit_mode:
-            print(f"Cannot start {name} while sitting (press Y to stand up first)")
+            print(f"坐下时无法启动 {name} (请先按 Y 起立)")
             return
         if self.slope_mode:
-            print(f"Cannot start {name} during slope mode")
+            print(f"slope 模式期间无法启动 {name}")
             return
         if name in ("kick_left", "kick_right"):
             self._place_ball(name)
@@ -711,7 +775,7 @@ class PolicyInference:
         self.current_policy = name
         self.ort_session = session
         self._update_command()
-        print(f"{name}: started (auto-return in {self.behavior_time_left:.1f}s)")
+        print(f"{name}: 已启动 ({self.behavior_time_left:.1f}s 后自动返回)")
 
     def _place_ball(self, behavior):
         """将球瞬移到踢球脚前方, 匹配训练的 reset_ball_in_front_of_foot (偏移在.
@@ -719,7 +783,7 @@ class PolicyInference:
         机器人 yaw 坐标系中).
         """
         if self.ball_qpos_adr is None or self.ball_qvel_adr is None:
-            print("No ball in scene (kick will swing at air)")
+            print("场景中没有球 (踢球将会踢空)")
             return
         adr = self._trunk_qpos_adr
         x, y = float(self.data.qpos[adr]), float(self.data.qpos[adr + 1])
@@ -739,7 +803,7 @@ class PolicyInference:
         ]
         self.data.qvel[self.ball_qvel_adr : self.ball_qvel_adr + 6] = 0.0
         foot = behavior.split("_")[1]
-        print(f"Ball placed at ({bx:.3f}, {by:.3f}) in front of the {foot} foot")
+        print(f"球放置在 ({bx:.3f}, {by:.3f}), 在{foot}脚的前方")
 
     def update_behavior(self, dt: float):
         """推进行为计时器; 完成后交回 walking/standing."""
@@ -764,7 +828,7 @@ class PolicyInference:
             self.current_policy = "sit"
             self.ort_session = self.sit_session
         self._update_command()
-        print(f"{name}: done → back to {self.current_policy}")
+        print(f"{name}: 完成 → 切回 {self.current_policy}")
 
     def toggle_sit(self):
         """开关坐下 (Y 键).
@@ -776,44 +840,44 @@ class PolicyInference:
         速度命令会像往常一样切回 walking/standing.
         """
         if self.sit_session is None:
-            print("Sit unavailable: no --sit/--sitstand policy loaded")
+            print("sit 不可用: 未加载 --sit/--sitstand 策略")
             return
         if self.ground_pick_mode:
-            print("Cannot sit during ground pick")
+            print("ground pick 期间无法坐下")
             return
         if self.behavior_mode is not None:
-            print(f"Cannot sit during {self.behavior_mode}")
+            print(f"{self.behavior_mode} 期间无法坐下")
             return
         self.sit_mode = not self.sit_mode
         if self.sit_mode:
             self.vel_cmd = np.zeros(3, dtype=np.float32)
             self.current_policy = "sit"
             self.ort_session = self.sit_session
-            print("Sit: ON" + (" (sitstand flag=1; Y again to stand up)" if self.is_sitstand else ""))
+            print("Sit: 开启" + (" (sitstand flag=1; 再按 Y 起身)" if self.is_sitstand else ""))
         elif self.is_sitstand:
             # 留在 sitstand session — 它自己起身 (flag → 0).
             # 不要在这里切到 standing 策略: 它会接管
             # 它未训练过的坐姿到起身中间状态.
-            print("Sit: OFF → sitstand policy standing up (flag=0)")
+            print("Sit: 关闭 → sitstand 策略正在起身 (flag=0)")
         else:
             if self.standing_session:
                 self.current_policy = "standing"
             else:
                 self.current_policy = "walking"
             self.ort_session = self.standing_session if self.current_policy == "standing" else self.walking_session
-            print(f"Sit: OFF → back to {self.current_policy}")
+            print(f"Sit: 关闭 → 切回 {self.current_policy}")
         self._update_command()
 
     def toggle_head_mode(self):
         """开关头部控制模式."""
         self.head_mode = not self.head_mode
         if self.head_mode:
-            print("Head mode: ON")
+            print("头部模式: 开启")
             print(
-                f"  Z/S: neck_pitch  |  UP/DOWN: head_pitch  |  LEFT/RIGHT: head_yaw  |  A/E: head_roll  |  SPACE: reset  (max ±{self.head_max:.2f} rad)"
+                f"  Z/S: neck_pitch  |  UP/DOWN: head_pitch  |  LEFT/RIGHT: head_yaw  |  A/E: head_roll  |  SPACE: 重置  (最大 ±{self.head_max:.2f} rad)"
             )
         else:
-            print("Head mode: OFF")
+            print("头部模式: 关闭")
 
     def infer(self):
         """运行策略推理并返回动作."""
@@ -834,184 +898,92 @@ class PolicyInference:
             target_positions = self.default_pose + delayed_action * self.action_scale
         else:
             target_positions = self.default_pose + action * self.action_scale
-
-        self.data.ctrl[:] = target_positions
         # Legacy 模式: head_offset 是叠加在策略输出之上的外部扰动.
         # 新模式: head_offset 是输入到策略 obs 的命令, 因此策略自身
         # 产生带偏移的头部姿态.
         if not self.new_cmd_obs:
-            self.data.ctrl[5:9] += self.head_offset
+            target_positions = target_positions.copy()
+            target_positions[5:9] += self.head_offset
+        self.set_position_targets(target_positions)
+
+    def set_position_targets(self, target_positions):
+        """将关节位置目标发送给执行器.
+
+        BAM: 固件位置环位于控制器内部 (ctrl 是其在 update() 时写入的电机
+        转矩). Legacy: MuJoCo position 执行器.
+        """
+        if self.bam_ctrl is not None:
+            self.bam_ctrl.q_target[:] = target_positions
+        else:
+            self.data.ctrl[:] = target_positions
 
 
 def main():
     """CLI 入口: 在 MuJoCo 仿真中运行 ONNX 策略."""
-    parser = argparse.ArgumentParser(description="Run ONNX policy in MuJoCo")
-    parser.add_argument(
-        "--roller",
-        action="store_true",
-        help="使用 roller skate 机器人 XML (robot_walk_rollers.xml)",
-    )
+    parser = argparse.ArgumentParser(description="在 MuJoCo 仿真中运行 ONNX 策略")
+    parser.add_argument("--roller", action="store_true", help="使用 roller skate 机器人 XML (robot_walk_rollers.xml)")
+    parser.add_argument("--scene", type=str, default=None, help="场景 XML 路径, 覆盖默认选择 (例如 src/mjlab_microduck/robot/microduck/scene_allcollisions.xml)")
     parser.add_argument("--walking", type=str, default=None, help="walking 策略 ONNX 文件路径")
-    parser.add_argument(
-        "--standing",
-        "-s",
-        type=str,
-        default=None,
-        help="standing 策略 ONNX 文件路径",
-    )
-    parser.add_argument(
-        "--ground-pick",
-        type=str,
-        default=None,
-        help="ground pick 策略 ONNX 文件路径 (按 G 激活)",
-    )
-    parser.add_argument(
-        "--sit",
-        type=str,
-        default=None,
-        help="旧的单向 sitting 策略 ONNX 文件路径 (按 Y 坐下, 再按 Y 切回 standing/walking 策略)",
-    )
-    parser.add_argument(
-        "--sitstand",
-        type=str,
-        default=None,
-        help="sitstand 策略 ONNX 路径 (受控 sit<->stand; 按 Y 坐下, 再按 Y 同一策略起身). 需要 --new-cmd-obs. 可单独运行.",
-    )
-    parser.add_argument(
-        "--slope",
-        type=str,
-        default=None,
-        help="slope 策略 ONNX 文件路径 (按 Y 切换)",
-    )
-    parser.add_argument(
-        "--kick-left",
-        type=str,
-        default=None,
-        help="左脚踢球策略 ONNX 路径 (按 K 触发). 需要 --new-cmd-obs. 加载带球的场景.",
-    )
-    parser.add_argument(
-        "--kick-right",
-        type=str,
-        default=None,
-        help="右脚踢球策略 ONNX 路径 (按 L 触发). 需要 --new-cmd-obs. 加载带球的场景.",
-    )
-    parser.add_argument(
-        "--roulade",
-        type=str,
-        default=None,
-        help="roulade (前滚翻) 策略 ONNX 路径 (按 R 触发). 需要 --new-cmd-obs.",
-    )
-    parser.add_argument(
-        "--kick-duration",
-        type=float,
-        default=3.0,
-        help="踢球策略保持活动的秒数, 之后交回 standing/walking (默认: 3.0)",
-    )
-    parser.add_argument(
-        "--roulade-duration",
-        type=float,
-        default=2.0,
-        help="roulade 策略保持活动的秒数, 之后交回 standing/walking (默认: 2.0, 约为翻滚本身; 站立/行走策略接管稳定阶段)",
-    )
-    parser.add_argument(
-        "--lin-vel-x",
-        type=float,
-        default=0.0,
-        help="初始线速度 X 命令 (m/s)",
-    )
-    parser.add_argument(
-        "--lin-vel-y",
-        type=float,
-        default=0.0,
-        help="初始线速度 Y 命令 (m/s)",
-    )
-    parser.add_argument(
-        "--ang-vel-z",
-        type=float,
-        default=0.0,
-        help="初始角速度 Z 命令 (rad/s)",
-    )
+    parser.add_argument("--standing", "-s", type=str, default=None, help="standing 策略 ONNX 文件路径")
+    parser.add_argument("--ground-pick", type=str, default=None, help="ground pick 策略 ONNX 文件路径 (按 G 激活)")
+    parser.add_argument("--sit", type=str, default=None, help="旧的单向 sitting 策略 ONNX 文件路径 (按 Y 坐下, 再按 Y 切回 standing/walking 策略)")
+    parser.add_argument("--sitstand", type=str, default=None, help="sitstand 策略 ONNX 路径 (受控 sit<->stand; 按 Y 坐下, 再按 Y 同一策略起身). 需要 --new-cmd-obs. 可单独运行.")
+    parser.add_argument("--slope", type=str, default=None, help="slope 策略 ONNX 文件路径 (按 Y 切换)")
+    parser.add_argument("--kick-left", type=str, default=None, help="左脚踢球策略 ONNX 路径 (按 K 触发). 需要 --new-cmd-obs. 加载带球的场景.")
+    parser.add_argument("--kick-right", type=str, default=None, help="右脚踢球策略 ONNX 路径 (按 L 触发). 需要 --new-cmd-obs. 加载带球的场景.")
+    parser.add_argument("--roulade", type=str, default=None, help="roulade (前滚翻) 策略 ONNX 路径 (按 R 触发). 需要 --new-cmd-obs.")
+    parser.add_argument("--kick-duration", type=float, default=3.0, help="踢球策略保持活动的秒数, 之后交回 standing/walking (默认: 3.0)")
+    parser.add_argument("--roulade-duration", type=float, default=2.0, help="roulade 策略保持活动的秒数, 之后交回 standing/walking (默认: 2.0, 约为翻滚本身; 站立/行走策略接管稳定阶段)")
+    parser.add_argument("--lin-vel-x", type=float, default=0.0, help="初始线速度 X 命令 (m/s)")
+    parser.add_argument("--lin-vel-y", type=float, default=0.0, help="初始线速度 Y 命令 (m/s)")
+    parser.add_argument("--ang-vel-z", type=float, default=0.0, help="初始角速度 Z 命令 (rad/s)")
     parser.add_argument("--action-scale", type=float, default=1.0, help="动作缩放 (默认: 1.0)")
-    parser.add_argument(
-        "--raw-accelerometer",
-        action="store_true",
-        help="使用原始加速度计而非投影重力",
-    )
-    parser.add_argument(
-        "--delay",
-        type=int,
-        nargs="*",
-        default=None,
-        help="启用执行器延迟: --delay MIN MAX 或 --delay LAG",
-    )
+    parser.add_argument("--raw-accelerometer", action="store_true", help="使用原始加速度计而非投影重力")
+    parser.add_argument("--delay", type=int, nargs='*', default=None, help="启用执行器延迟: --delay MIN MAX 或 --delay LAG")
     parser.add_argument("--debug", action="store_true", help="打印观测和动作")
-    parser.add_argument(
-        "--save-csv",
-        type=str,
-        default=None,
-        help="将观测和动作保存到 CSV 文件",
-    )
-    parser.add_argument(
-        "--record",
-        type=str,
-        default=None,
-        help="启用录制模式: 在 Ctrl+C 时将观测保存到 pickle 文件",
-    )
-    parser.add_argument(
-        "--switch-threshold",
-        type=float,
-        default=0.05,
-        help="walking/standing 切换的速度命令幅度阈值 (默认: 0.05)",
-    )
-    parser.add_argument(
-        "--ground-pick-period",
-        type=float,
-        default=4.0,
-        help="ground pick 相位周期, 单位秒 (默认: 4.0)",
-    )
-    parser.add_argument(
-        "--new-cmd-obs",
-        action="store_true",
-        help="使用统一的 13D 命令 obs 布局 (twist+head_pose+body_pose). "
-        "使用新 pose-command-tracking 设置训练的策略需要此选项. "
-        "旧策略 (51D obs, head_offset 加到 ctrl) 需要关闭此标志.",
-    )
-    parser.add_argument(
-        "--current-limit",
-        type=float,
-        default=1.75,
-        help="XL330 固件电流限制 [A]. 执行器力矩被裁剪到 "
-        "+/- current_limit * kt (kt 来自 bam 包), 匹配训练中建模的"
-        "电流饱和. <=0 禁用.",
-    )
-    parser.add_argument(
-        "--foot-friction",
-        type=float,
-        default=None,
-        help="覆盖脚部滑动摩擦 (mu), 以模拟真实的高抓地力 "
-        "PU 鞋底. 训练使用 mu~1.0 (范围 0.7-1.3); 真实 PU 大约 "
-        "~1.5-2.5. 例如 --foot-friction 2.0",
-    )
-    parser.add_argument(
-        "--foot-solref",
-        type=float,
-        default=None,
-        help="软化脚部接触: 脚部 geom 的 solref 时间常数 (s) "
-        "(默认仿真 ~0.02 = 硬/刚性). 越大越软, 用于模拟 "
-        "柔顺的 PU 鞋底. 例如 --foot-solref 0.04",
-    )
+    parser.add_argument("--save-csv", type=str, default=None, help="将观测和动作保存到 CSV 文件")
+    parser.add_argument("--record", type=str, default=None, help="启用录制模式: 在 Ctrl+C 时将观测保存到 pickle 文件")
+    parser.add_argument("--switch-threshold", type=float, default=0.05, help="walking/standing 切换的速度命令幅度阈值 (默认: 0.05)")
+    parser.add_argument("--ground-pick-period", type=float, default=4.0, help="ground pick 相位周期, 单位秒 (默认: 4.0)")
+    parser.add_argument("--new-cmd-obs", action="store_true",
+                        help="使用统一的 13D 命令 obs 布局 (twist+head_pose+body_pose). "
+                             "使用新 pose-command-tracking 设置训练的策略需要此选项. "
+                             "旧策略 (51D obs, head_offset 加到 ctrl) 需要关闭此标志.")
+    parser.add_argument("--no-bam", action="store_true",
+                        help="使用 XML MuJoCo position 执行器, 而非策略训练所用的 BAM M6 "
+                             "电压/摩擦模型.")
+    parser.add_argument("--vin", type=float, default=7.4,
+                        help="BAM 电池电压 [V]. 训练时 per-env 采样范围 "
+                             f"{BAM_VIN_RANGE}; 7.4 = 标称 2S LiPo.")
+    parser.add_argument("--vin-drop-gain", type=float, default=0.1,
+                        help="BAM 负载相关的电压跌落增益 [V/Nm], V = vin - gain*sum|tau|. "
+                             f"训练时 per-env 采样范围 {BAM_VIN_DROP_GAIN_RANGE}. 0 表示禁用.")
+    parser.add_argument("--kp-fw", type=float, default=BAM_KP_FW,
+                        help="BAM 固件 P 增益 (训练使用 %(default)s).")
+    parser.add_argument("--current-limit", type=float, default=0.0,
+                        help="XL330 固件电流限制 [A]. 使用 BAM 时是电压模型的占空比限制器 "
+                             "(按 bam 建模); 使用 --no-bam 时执行器力矩被裁剪到 "
+                             "+/- current_limit * kt. 训练时没有电流限制, 默认关闭 (<=0).")
+    parser.add_argument("--foot-friction", type=float, default=None,
+                        help="覆盖脚部滑动摩擦 (mu), 以模拟真实的高抓地力 "
+                             "PU 鞋底. 训练使用 mu~1.0 (范围 0.7-1.3); 真实 PU 大约 "
+                             "~1.5-2.5. 例如 --foot-friction 2.0")
+    parser.add_argument("--foot-solref", type=float, default=None,
+                        help="软化脚部接触: 脚部 geom 的 solref 时间常数 (s) "
+                             "(默认仿真 ~0.02 = 硬/刚性). 越大越软, 用于模拟 "
+                             "柔顺的 PU 鞋底. 例如 --foot-solref 0.04")
     args = parser.parse_args()
 
     if not args.walking and not args.standing and not args.sitstand:
-        parser.error("At least one of --walking, --standing or --sitstand must be provided")
+        parser.error("--walking, --standing 或 --sitstand 中至少要提供一个")
     if args.sitstand and not args.new_cmd_obs:
-        parser.error("--sitstand policies use the unified 13D command obs (61D); add --new-cmd-obs")
+        parser.error("--sitstand 策略使用统一的 13D 命令 obs (61D); 请添加 --new-cmd-obs")
     if (args.kick_left or args.kick_right or args.roulade) and not args.new_cmd_obs:
         parser.error(
-            "--kick-left/--kick-right/--roulade policies use the unified 13D command obs (61D); add --new-cmd-obs"
+            "--kick-left/--kick-right/--roulade 策略使用统一的 13D 命令 obs (61D); 请添加 --new-cmd-obs"
         )
     if (args.kick_left or args.kick_right or args.roulade) and args.roller:
-        parser.error("kick/roulade policies are trained on the walking robot, not the roller model")
+        parser.error("kick/roulade 策略是在 walking 机器人上训练的, 不适用于 roller 模型")
 
     # 解析延迟参数
     delay_min_lag = 0
@@ -1027,27 +999,41 @@ def main():
             delay_min_lag = args.delay[0]
             delay_max_lag = args.delay[1]
         else:
-            print("Error: --delay accepts 0, 1, or 2 arguments")
+            print("错误: --delay 只能接受 0, 1 或 2 个参数")
             return
 
     # 加载 MuJoCo 模型. 踢球策略使用带球的场景.
-    if args.roller:
+    # --scene 覆盖所有选择 (任何机器人具有标准 14 舵机布局的场景都可用,
+    # 例如 scene_allcollisions.xml).
+    if args.scene:
+        xml_path = args.scene
+    elif args.roller:
         xml_path = MICRODUCK_ROLLERS_XML
     elif args.kick_left or args.kick_right:
         xml_path = MICRODUCK_BALL_XML
     else:
         xml_path = MICRODUCK_XML
-    print(f"Loading MuJoCo model from: {xml_path}")
-    model = mujoco.MjModel.from_xml_path(xml_path)
-    model.opt.timestep = 0.005
-    data = mujoco.MjData(model)
+    print(f"正在加载 MuJoCo 模型: {xml_path}")
+    bam_ctrl = None
+    if not args.no_bam:
+        # 策略在 warp 中训练时使用的同一执行器 (BAM M6 XL330, 电压控制 +
+        # 负载相关的摩擦预算), 由 bam.mujoco.MujocoController 在 CPU 上驱动.
+        # 电压 DR 在这里退化为固定的 --vin / --vin-drop-gain (训练时按 env 采样).
+        bam_model = load_bam_model(args.kp_fw, args.vin, args.current_limit)
+        vin_drop_gain = args.vin_drop_gain if args.vin_drop_gain > 0 else None
+        model, data, bam_ctrl, _bam_names = load_mujoco_with_bam(
+            xml_path, bam_model, 0.005, vin_drop_gain, BAM_VIN_MIN)
+    else:
+        model = mujoco.MjModel.from_xml_path(xml_path)
+        model.opt.timestep = 0.005
+        data = mujoco.MjData(model)
+        print("Legacy MuJoCo position 执行器 (--no-bam): 不是策略训练时所用的执行器")
 
-    # XL330 固件电流限制. 电机在 ~1.75 A 处饱和电流; 由于
-    # torque = kt * current, 这将执行器力限制在 +/- kt * I_max.
-    # 这里的 MuJoCo 位置执行器不是 BAM 电压模型, 但裁剪其输出力
-    # 可以重现策略训练时所用的电流饱和 (见 BamActuator.max_current).
+    # (仅 --no-bam) XL330 固件电流限制. 电机在 ~1.75 A 处饱和电流; 由于
+    # torque = kt * current, 这会把这执行器力限制在 +/- kt * I_max.
+    # 使用 BAM 时限制器改由电压控制器内部建模 (见 load_bam_model).
     # kt 来自 bam 包.
-    if args.current_limit and args.current_limit > 0:
+    if args.no_bam and args.current_limit and args.current_limit > 0:
         from bam.model import load_model
 
         kt = load_model(motor_name="xl330", model="m6").kt.value
@@ -1055,7 +1041,7 @@ def main():
         model.actuator_forcerange[:, 0] = -torque_limit
         model.actuator_forcerange[:, 1] = torque_limit
         model.actuator_forcelimited[:] = 1
-        print(f"Current limit: {args.current_limit:.2f} A -> torque limit +/-{torque_limit:.4f} Nm (kt={kt:.4f})")
+        print(f"电流限制: {args.current_limit:.2f} A -> 力矩限制 +/-{torque_limit:.4f} Nm (kt={kt:.4f})")
 
     # 脚部接触覆盖 — 模拟真实的高抓地力 + 柔软 PU 鞋底, 检查
     # 是否能重现机器人在高速时前扑的现象. 训练使用 mu~1.0 的
@@ -1069,21 +1055,21 @@ def main():
             gname = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, g)
             if gname and _re.match(r"^(left|right)_foot_collision$", gname):
                 if args.foot_friction is not None:
-                    model.geom_friction[g, 0] = args.foot_friction  # tangential mu
+                    model.geom_friction[g, 0] = args.foot_friction  # 切向 mu
                 if args.foot_solref is not None:
-                    model.geom_solref[g, 0] = args.foot_solref  # softer contact
+                    model.geom_solref[g, 0] = args.foot_solref  # 更柔软的接触
                     model.geom_solref[g, 1] = 1.0
                 n_feet += 1
         print(
-            f"Foot override on {n_feet} geoms: "
-            f"mu={args.foot_friction if args.foot_friction is not None else 'default'}, "
-            f"solref={args.foot_solref if args.foot_solref is not None else 'default'}"
+            f"对 {n_feet} 个 geom 的脚部覆盖: "
+            f"mu={args.foot_friction if args.foot_friction is not None else '默认'}, "
+            f"solref={args.foot_solref if args.foot_solref is not None else '默认'}"
         )
 
     # 初始化策略
     policy = PolicyInference(
-        model,
-        data,
+        model, data,
+        bam_ctrl=bam_ctrl,
         walking_onnx_path=args.walking,
         action_scale=args.action_scale,
         delay_min_lag=delay_min_lag,
@@ -1142,7 +1128,9 @@ def main():
     data.qpos[qpos_adr + 3 : qpos_adr + 7] = [1, 0, 0, 0]
     for i, qpos_idx in enumerate(policy.joint_qpos_indices):
         data.qpos[qpos_idx] = policy.default_pose[i]
-    data.ctrl[:] = policy.default_pose
+    if bam_ctrl is not None:
+        bam_ctrl.reset(data.qpos)   # clears voltage-drop state, q_target = current qpos
+    policy.set_position_targets(policy.default_pose)
     mujoco.mj_forward(model, data)
 
     # 校验观测尺寸
@@ -1155,41 +1143,41 @@ def main():
     )
 
     if test_obs.size != expected_obs_size:
-        print("\nWARNING: Observation size mismatch!")
-        print(f"  Expected: {expected_obs_size}")
-        print(f"  Got: {test_obs.size}")
-        print(f"  Breakdown: {breakdown}")
+        print("\nWARNING: 观测尺寸不匹配!")
+        print(f"  期望: {expected_obs_size}")
+        print(f"  得到: {test_obs.size}")
+        print(f"  分解: {breakdown}")
         print()
 
     print("\n" + "=" * 80)
-    print("MicroDuck Policy Inference")
+    print("MicroDuck 策略推理")
     print("=" * 80)
-    print("Control frequency: 50 Hz (decimation: 4)")
-    print(f"Simulation timestep: {model.opt.timestep}s")
-    print(f"Observation size: {test_obs.size} (expected: {expected_obs_size})")
+    print("控制频率: 50 Hz (decimation: 4)")
+    print(f"仿真时间步长: {model.opt.timestep}s")
+    print(f"观测尺寸: {test_obs.size} (期望: {expected_obs_size})")
     if policy.walking_session:
-        print("Walking policy: loaded")
+        print("walking 策略: 已加载")
     if policy.standing_session:
         print(
-            f"Standing policy: loaded  (body pose: z=±{BODY_CMD_MAX_Z * 1000:.0f}mm, pitch/roll=±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)"
+            f"standing 策略: 已加载  (躯干姿态: z=±{BODY_CMD_MAX_Z * 1000:.0f}mm, pitch/roll=±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)"
         )
     if policy.walking_session and policy.standing_session:
-        print(f"  Switch threshold: {policy.switch_threshold} (vel cmd magnitude)")
+        print(f"  切换阈值: {policy.switch_threshold} (速度命令幅度)")
     if policy.ground_pick_session:
-        print("Ground pick policy: loaded  (press G)")
+        print("ground pick 策略: 已加载  (按 G)")
     if policy.sit_session:
         kind = "Sitstand" if policy.is_sitstand else "Sit"
-        print(f"{kind} policy: loaded  (press Y to toggle)")
+        print(f"{kind} 策略: 已加载  (按 Y 切换)")
     if policy.slope_session:
-        print("Slope policy: loaded  (press Y to toggle, passive descent)")
+        print("slope 策略: 已加载  (按 Y 切换, 被动下滑)")
     _behavior_keys = {"kick_left": "K", "kick_right": "L", "roulade": "R"}
     for _name in policy.behavior_sessions:
         print(
-            f"{_name} policy: loaded  (press {_behavior_keys[_name]}, "
-            f"auto-return after {policy.behavior_durations[_name]:.1f}s)"
+            f"{_name} 策略: 已加载  (按 {_behavior_keys[_name]}, "
+            f"{policy.behavior_durations[_name]:.1f}s 后自动返回)"
         )
-    print(f"Active policy: {policy.current_policy}")
-    print("Close viewer window to exit")
+    print(f"当前活动策略: {policy.current_policy}")
+    print("关闭 viewer 窗口以退出")
     print()
 
     decimation = 4
@@ -1211,6 +1199,22 @@ def main():
     if args.record:
         original_kp = model.actuator_gainprm[:, 0].copy()
 
+    # Standby (--record) 增益: legacy 路径把 position 执行器的 kp 设为 2.0
+    # (XML kp 0.55 ~ kp_fw 200). 使用 BAM 时对固件增益施加同样的比例,
+    # 让两条路径以相同的相对刚度保持.
+    _XML_KP_NOMINAL = 0.55
+    _STANDBY_KP = 2.0
+
+    def set_standby_gains(on: bool):
+        if bam_ctrl is not None:
+            bam_ctrl.model.actuator.kp = args.kp_fw * (_STANDBY_KP / _XML_KP_NOMINAL if on else 1.0)
+            print(f"  BAM kp_fw 设为 {bam_ctrl.model.actuator.kp:.0f}")
+            return
+        for i in range(model.nu):
+            kp = _STANDBY_KP if on else original_kp[i]
+            model.actuator_gainprm[i, 0] = kp
+            model.actuator_biasprm[i, 1] = -kp
+
     # 缓存 trunk freejoint 的 qvel 地址, 以便 push 处理器可以直接写入
     # trunk 的世界坐标系线速度 (qvel[0..3]).
     _freejoint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "trunk_base_freejoint")
@@ -1231,7 +1235,7 @@ def main():
         vy = PUSH_MAX * np.sin(angle)
         data.qvel[_trunk_qvel_adr + 0] = vx
         data.qvel[_trunk_qvel_adr + 1] = vy
-        print(f"PUSH applied: v=[{vx:.2f}, {vy:.2f}, 0] m/s (angle={np.degrees(angle):.0f}°)")
+        print(f"PUSH 已施加: v=[{vx:.2f}, {vy:.2f}, 0] m/s (角度={np.degrees(angle):.0f}°)")
 
     # 按键来自 TERMINAL (原始 stdin, 见 TerminalInput) — 不来自
     # MuJoCo viewer 窗口, 因为 viewer 窗口中的按键也会触发内置可视化
@@ -1251,7 +1255,7 @@ def main():
                     )
                     policy._update_command()
                     print(
-                        f"Head offset: neck={policy.head_offset[0]:.2f} pitch={policy.head_offset[1]:.2f} yaw={policy.head_offset[2]:.2f} roll={policy.head_offset[3]:.2f}"
+                        f"头部偏移: neck={policy.head_offset[0]:.2f} pitch={policy.head_offset[1]:.2f} yaw={policy.head_offset[2]:.2f} roll={policy.head_offset[3]:.2f}"
                     )
                 elif policy.body_pose_mode:
                     policy.bump_body("z", policy.body_cmd_step_z)
@@ -1266,7 +1270,7 @@ def main():
                     )
                     policy._update_command()
                     print(
-                        f"Head offset: neck={policy.head_offset[0]:.2f} pitch={policy.head_offset[1]:.2f} yaw={policy.head_offset[2]:.2f} roll={policy.head_offset[3]:.2f}"
+                        f"头部偏移: neck={policy.head_offset[0]:.2f} pitch={policy.head_offset[1]:.2f} yaw={policy.head_offset[2]:.2f} roll={policy.head_offset[3]:.2f}"
                     )
                 elif policy.body_pose_mode:
                     policy.bump_body("z", -policy.body_cmd_step_z)
@@ -1281,7 +1285,7 @@ def main():
                     )
                     policy._update_command()
                     print(
-                        f"Head offset: neck={policy.head_offset[0]:.2f} pitch={policy.head_offset[1]:.2f} yaw={policy.head_offset[2]:.2f} roll={policy.head_offset[3]:.2f}"
+                        f"头部偏移: neck={policy.head_offset[0]:.2f} pitch={policy.head_offset[1]:.2f} yaw={policy.head_offset[2]:.2f} roll={policy.head_offset[3]:.2f}"
                     )
                 elif policy.body_pose_mode:
                     policy.bump_body("pitch", -policy.body_cmd_step_angle)
@@ -1303,7 +1307,7 @@ def main():
                     )
                     policy._update_command()
                     print(
-                        f"Head offset: neck={policy.head_offset[0]:.2f} pitch={policy.head_offset[1]:.2f} yaw={policy.head_offset[2]:.2f} roll={policy.head_offset[3]:.2f}"
+                        f"头部偏移: neck={policy.head_offset[0]:.2f} pitch={policy.head_offset[1]:.2f} yaw={policy.head_offset[2]:.2f} roll={policy.head_offset[3]:.2f}"
                     )
                 elif policy.body_pose_mode:
                     policy.bump_body("pitch", policy.body_cmd_step_angle)
@@ -1320,11 +1324,11 @@ def main():
                 if policy.head_mode:
                     policy.head_offset[:] = 0.0
                     policy._update_command()
-                    print("Head offset reset to zero")
+                    print("Head offset 已重置为零")
                 elif policy.body_pose_mode:
                     policy.body_cmd[:] = 0.0
                     policy._update_command()
-                    print("Body pose cmd reset to zero")
+                    print("躯干姿态命令已重置为零")
                 else:
                     policy.set_vel_cmd(0.0, 0.0, 0.0)
             elif key == "t":
@@ -1332,7 +1336,7 @@ def main():
                 # 查询 ONNX 策略, 电机保持最后应用的
                 # 目标 (没有新的 ctrl 写入).
                 policy_enabled = not policy_enabled
-                print(f"Policy inference: {'ON' if policy_enabled else 'OFF (paused)'}")
+                print(f"策略推理: {'开启' if policy_enabled else '关闭 (暂停)'}")
             elif key == "g":
                 policy.trigger_ground_pick()
             elif key == "k":
@@ -1343,7 +1347,7 @@ def main():
                 policy.trigger_behavior("roulade")
             elif key == "q":
                 quit_requested = True
-                print("Quit requested")
+                print("已请求退出")
             elif key == "y":
                 # Y 切换已加载的辅助策略 (--sit 或 --slope).
                 if policy.sit_session is not None:
@@ -1365,7 +1369,7 @@ def main():
                     )
                     policy._update_command()
                     print(
-                        f"Head offset: neck={policy.head_offset[0]:.2f} pitch={policy.head_offset[1]:.2f} yaw={policy.head_offset[2]:.2f} roll={policy.head_offset[3]:.2f}"
+                        f"头部偏移: neck={policy.head_offset[0]:.2f} pitch={policy.head_offset[1]:.2f} yaw={policy.head_offset[2]:.2f} roll={policy.head_offset[3]:.2f}"
                     )
                 elif policy.body_pose_mode:
                     policy.bump_body("roll", policy.body_cmd_step_angle)
@@ -1380,7 +1384,7 @@ def main():
                     )
                     policy._update_command()
                     print(
-                        f"Head offset: neck={policy.head_offset[0]:.2f} pitch={policy.head_offset[1]:.2f} yaw={policy.head_offset[2]:.2f} roll={policy.head_offset[3]:.2f}"
+                        f"头部偏移: neck={policy.head_offset[0]:.2f} pitch={policy.head_offset[1]:.2f} yaw={policy.head_offset[2]:.2f} roll={policy.head_offset[3]:.2f}"
                     )
                 elif policy.body_pose_mode:
                     policy.bump_body("roll", -policy.body_cmd_step_angle)
@@ -1395,7 +1399,7 @@ def main():
                     )
                     policy._update_command()
                     print(
-                        f"Head offset: neck={policy.head_offset[0]:.2f} pitch={policy.head_offset[1]:.2f} yaw={policy.head_offset[2]:.2f} roll={policy.head_offset[3]:.2f}"
+                        f"头部偏移: neck={policy.head_offset[0]:.2f} pitch={policy.head_offset[1]:.2f} yaw={policy.head_offset[2]:.2f} roll={policy.head_offset[3]:.2f}"
                     )
                 elif policy.body_pose_mode and policy.new_cmd_obs:
                     policy.bump_body("yaw", policy.body_cmd_step_angle)
@@ -1408,45 +1412,45 @@ def main():
                     )
                     policy._update_command()
                     print(
-                        f"Head offset: neck={policy.head_offset[0]:.2f} pitch={policy.head_offset[1]:.2f} yaw={policy.head_offset[2]:.2f} roll={policy.head_offset[3]:.2f}"
+                        f"头部偏移: neck={policy.head_offset[0]:.2f} pitch={policy.head_offset[1]:.2f} yaw={policy.head_offset[2]:.2f} roll={policy.head_offset[3]:.2f}"
                     )
                 elif policy.body_pose_mode and policy.new_cmd_obs:
                     policy.bump_body("yaw", -policy.body_cmd_step_angle)
         except Exception as e:
-            print(f"Key press error: {e}")
+            print(f"按键处理错误: {e}")
 
-    print("\nKeyboard controls (type in THIS terminal — the viewer window no longer captures keys):")
-    print("  [ Velocity mode (default) ]")
-    print("  UP arrow:         increase lin_vel_x (push/accelerate)")
-    print("  DOWN arrow:       decrease lin_vel_x (0=coast, negative=brake)")
+    print("\n键盘控制 (请在此终端中输入 - viewer 窗口不再捕获按键):")
+    print("  [ 速度模式 (默认) ]")
+    print("  UP 方向键:        增大 lin_vel_x (前进/加速)")
+    print("  DOWN 方向键:      减小 lin_vel_x (0=惯性滑行, 负值=制动)")
     if args.roller:
-        print("  LEFT/RIGHT arrow: turn left/right (ang_vel_z heading error)")
-        print("  A / E:            turn left/right (ang_vel_z, incremental)")
+        print("  LEFT/RIGHT 方向键: 左右转向 (ang_vel_z 航向误差)")
+        print("  A / E:            左右转向 (ang_vel_z, 增量式)")
     else:
-        print("  LEFT/RIGHT arrow: strafe left/right (lin_vel_y)")
-        print("  A / E:            turn left/right (ang_vel_z)")
-    print("  SPACE:            coast (zero all commands)")
-    print("  T:                toggle policy inference on/off (paused = motors hold last target)")
-    print("  G:                trigger ground pick (requires --ground-pick)")
-    print("  Y:                toggle sit (with --sit/--sitstand) or slope mode (with --slope)")
-    print("  K:                kick with LEFT foot (requires --kick-left)")
-    print("  L:                kick with RIGHT foot (requires --kick-right)")
-    print("  R:                roulade / forward roll (requires --roulade)")
-    print(f"  P:                random push (trunk vel = {PUSH_MAX:.1f} m/s in random direction)")
-    print("  Q:                quit")
-    print("  [ Body pose mode — press B to toggle ]")
-    print(f"  UP/DOWN arrow:    Δz ±10mm  (max ±{BODY_CMD_MAX_Z * 1000:.0f}mm)")
-    print(f"  LEFT/RIGHT arrow: Δpitch ±10°  (max ±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)")
-    print(f"  A / E:            Δroll ±10°  (max ±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)")
+        print("  LEFT/RIGHT 方向键: 左右横移 (lin_vel_y)")
+        print("  A / E:            左右转向 (ang_vel_z)")
+    print("  SPACE:            惯性滑行 (清零所有命令)")
+    print("  T:                开关策略推理 (暂停 = 电机保持最后目标)")
+    print("  G:                触发 ground pick (需要 --ground-pick)")
+    print("  Y:                切换 sit (带 --sit/--sitstand) 或 slope 模式 (带 --slope)")
+    print("  K:                左脚踢球 (需要 --kick-left)")
+    print("  L:                右脚踢球 (需要 --kick-right)")
+    print("  R:                roulade / 前滚翻 (需要 --roulade)")
+    print(f"  P:                随机 push (躯干速度 = {PUSH_MAX:.1f} m/s, 随机方向)")
+    print("  Q:                退出")
+    print("  [ 躯干姿态模式 - 按 B 切换 ]")
+    print(f"  UP/DOWN 方向键:   Δz ±10mm  (最大 ±{BODY_CMD_MAX_Z * 1000:.0f}mm)")
+    print(f"  LEFT/RIGHT 方向键: Δpitch ±10°  (最大 ±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)")
+    print(f"  A / E:            Δroll ±10°  (最大 ±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)")
     if args.new_cmd_obs:
-        print(f"  Z / S:            Δyaw ±10°  (new_cmd_obs only, max ±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)")
-    print("  SPACE:            reset body pose to zero")
-    print("  [ Head mode — press H to toggle ]")
+        print(f"  Z / S:            Δyaw ±10°  (仅 new_cmd_obs, 最大 ±{math.degrees(BODY_CMD_MAX_ANGLE):.0f}°)")
+    print("  SPACE:            重置躯干姿态为零")
+    print("  [ 头部模式 - 按 H 切换 ]")
     print("  Z / S:            neck_pitch ±step")
-    print("  UP/DOWN arrow:    head_pitch ±step")
-    print("  LEFT/RIGHT arrow: head_yaw ±step")
+    print("  UP/DOWN 方向键:   head_pitch ±step")
+    print("  LEFT/RIGHT 方向键: head_yaw ±step")
     print("  A / E:            head_roll ±step")
-    print("  SPACE:            reset head offset to zero")
+    print("  SPACE:            重置 head offset 为零")
 
     with (
         TerminalInput() as term,
@@ -1457,11 +1461,9 @@ def main():
 
         if args.record:
             policy_enable_time = start_time + 1.0
-            print("Recording mode: policy will be enabled after 1 second standby")
-            for i in range(model.nu):
-                model.actuator_gainprm[i, 0] = 2.0
-                model.actuator_biasprm[i, 1] = -2.0
-            print("  Standby mode: kp set to 2.0")
+            print("录制模式: 策略将在 1 秒待机后启用")
+            set_standby_gains(True)
+            print("  待机模式: kp 设为 2.0 (XML 单位)")
 
         try:
             prev_step_time = time.time()
@@ -1472,17 +1474,13 @@ def main():
                 for key in term.get_keys():
                     handle_key(key)
 
-                if not policy_enabled and policy_enable_time is not None and step_start >= policy_enable_time:
-                    policy_enabled = True
-                    if original_kp is not None:
-                        for i in range(model.nu):
-                            kp = original_kp[i]
-                            model.actuator_gainprm[i, 0] = kp
-                            model.actuator_biasprm[i, 1] = -kp
-                        print("Policy inference enabled (after 1s standby)")
-                        print(
-                            f"  Restored original kp gains (range: [{original_kp.min():.2f}, {original_kp.max():.2f}])"
-                        )
+                if not policy_enabled and policy_enable_time is not None:
+                    if step_start >= policy_enable_time:
+                        policy_enabled = True
+                        if original_kp is not None:
+                            set_standby_gains(False)
+                            print("策略推理已启用 (standby 1s 之后)")
+                            print(f"  已恢复原始 kp 增益 (范围: [{original_kp.min():.2f}, {original_kp.max():.2f}])")
 
                 actual_dt = step_start - prev_step_time
                 prev_step_time = step_start
@@ -1562,40 +1560,46 @@ def main():
                         com_height = pos[2]
 
                         print(f"\n{'=' * 70}")
-                        print(f"Step {control_step_count} DEBUG:")
+                        print(f"第 {control_step_count} 步 DEBUG:")
                         print(f"{'=' * 70}")
-                        print(f"Active policy: {policy.current_policy}")
-                        print("Base state:")
-                        print(f"  Position: [{pos[0]:7.4f}, {pos[1]:7.4f}, {pos[2]:7.4f}]")
-                        print(f"  CoM height: {com_height:7.4f}")
-                        print(f"  Quaternion: [{quat[0]:7.4f}, {quat[1]:7.4f}, {quat[2]:7.4f}, {quat[3]:7.4f}]")
-                        print(f"\nObservation (shape {obs.shape}, total {obs.size}):")
-                        print(f"  Ang vel [0:3]:        {obs[0:3]}")
-                        print(f"  Proj grav [3:6]:      {obs[3:6]}")
-                        print(f"  Joint pos [6:{6 + policy.n_joints}]:     {obs[6 : 6 + policy.n_joints]}")
+                        print(f"活动策略: {policy.current_policy}")
+                        print("基座状态:")
+                        print(f"  位置: [{pos[0]:7.4f}, {pos[1]:7.4f}, {pos[2]:7.4f}]")
+                        print(f"  CoM 高度: {com_height:7.4f}")
+                        print(f"  四元数: [{quat[0]:7.4f}, {quat[1]:7.4f}, {quat[2]:7.4f}, {quat[3]:7.4f}]")
+                        print(f"\n观测 (shape {obs.shape}, 共 {obs.size}):")
+                        print(f"  角速度 [0:3]:        {obs[0:3]}")
+                        print(f"  投影重力 [3:6]:      {obs[3:6]}")
+                        print(f"  关节位置 [6:{6 + policy.n_joints}]:     {obs[6 : 6 + policy.n_joints]}")
                         print(
-                            f"  Joint vel [{6 + policy.n_joints}:{6 + 2 * policy.n_joints}]:    {obs[6 + policy.n_joints : 6 + 2 * policy.n_joints]}"
+                            f"  关节速度 [{6 + policy.n_joints}:{6 + 2 * policy.n_joints}]:    {obs[6 + policy.n_joints : 6 + 2 * policy.n_joints]}"
                         )
                         print(
-                            f"  Last action [{6 + 2 * policy.n_joints}:{6 + 3 * policy.n_joints}]:  {obs[6 + 2 * policy.n_joints : 6 + 3 * policy.n_joints]}"
+                            f"  上一个动作 [{6 + 2 * policy.n_joints}:{6 + 3 * policy.n_joints}]:  {obs[6 + 2 * policy.n_joints : 6 + 3 * policy.n_joints]}"
                         )
                         cmd_end = 6 + 3 * policy.n_joints + 3
                         print(
-                            f"  Command [{6 + 3 * policy.n_joints}:{cmd_end}]:      {obs[6 + 3 * policy.n_joints : cmd_end]}"
+                            f"  命令 [{6 + 3 * policy.n_joints}:{cmd_end}]:      {obs[6 + 3 * policy.n_joints : cmd_end]}"
                         )
                         if policy.current_policy == "standing":
                             print(
-                                f"  Body cmd (raw): z={policy.body_cmd[0] * 1000:.1f}mm  pitch={math.degrees(policy.body_cmd[1]):.1f}°  roll={math.degrees(policy.body_cmd[2]):.1f}°"
+                                f"  躯干命令 (raw): z={policy.body_cmd[0] * 1000:.1f}mm  pitch={math.degrees(policy.body_cmd[1]):.1f}°  roll={math.degrees(policy.body_cmd[2]):.1f}°"
                             )
-                        print("\nAction output:")
-                        print(f"  Raw action: {action}")
-                        print(f"  Action min/max: [{action.min():.4f}, {action.max():.4f}]")
+                        print("\n动作输出:")
+                        print(f"  原始动作: {action}")
+                        print(f"  动作 min/max: [{action.min():.4f}, {action.max():.4f}]")
                         if policy.use_delay:
-                            print(f"  Delay: {policy.current_lag} timesteps (buffered)")
-                        print(f"  Applied ctrl (first 5): {data.ctrl[:5]}")
-                        print(f"  Applied ctrl (last 5):  {data.ctrl[-5:]}")
+                            print(f"  延迟: {policy.current_lag} 个时间步 (带缓冲)")
+                        ctrl_kind = "力矩 [Nm]" if bam_ctrl is not None else "position target"
+                        print(f"  施加的 ctrl ({ctrl_kind}, 前 5 个): {data.ctrl[:5]}")
+                        print(f"  施加的 ctrl ({ctrl_kind}, 后 5 个):  {data.ctrl[-5:]}")
 
                 for _ in range(decimation):
+                    if bam_ctrl is not None:
+                        # BAM 拥有控制/转矩/摩擦: update() 运行固件 P 环 +
+                        # 直流电机方程, 把转矩写入 data.ctrl, 并把摩擦预算推到
+                        # dof 上, 这样 MuJoCo 求解器会在这一步应用它.
+                        bam_ctrl.update()
                     mujoco.mj_step(model, data)
 
                 viewer.sync()
@@ -1606,28 +1610,28 @@ def main():
                     time.sleep(sleep_time)
 
         except KeyboardInterrupt:
-            print("\n\nKeyboardInterrupt received (Ctrl+C). Saving data...")
+            print("\n\n收到 KeyboardInterrupt (Ctrl+C). 正在保存数据...")
 
-    print("\nInference stopped.")
+    print("\n推理已停止.")
 
     if csv_data is not None and len(csv_data) > 0:
-        print(f"\nSaving {len(csv_data)} steps to: {args.save_csv}")
+        print(f"\n正在将 {len(csv_data)} 步保存到: {args.save_csv}")
         with Path(args.save_csv).open("w", newline="") as csvfile:
             fieldnames = csv_data[0].keys()
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(csv_data)
-        print("CSV file saved successfully!")
-        print(f"  Columns: {len(fieldnames)}")
-        print(f"  Rows: {len(csv_data)}")
+        print("CSV 文件保存成功!")
+        print(f"  列数: {len(fieldnames)}")
+        print(f"  行数: {len(csv_data)}")
 
     if recorded_observations is not None and len(recorded_observations) > 0:
-        print(f"\nSaving {len(recorded_observations)} recorded observations to: {args.record}")
+        print(f"\n正在将 {len(recorded_observations)} 条记录的观测保存到: {args.record}")
         with Path(args.record).open("wb") as f:
             pickle.dump(recorded_observations, f)
-        print(f"Recorded observations saved to {args.record}")
-        print(f"  Observations: {len(recorded_observations)}")
-        print(f"  Duration: {recorded_observations[-1]['timestamp']:.2f}s")
+        print(f"记录的观测已保存到 {args.record}")
+        print(f"  观测数: {len(recorded_observations)}")
+        print(f"  时长: {recorded_observations[-1]['timestamp']:.2f}s")
 
 
 if __name__ == "__main__":

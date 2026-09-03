@@ -64,9 +64,9 @@ class FrictionDRBamActuatorCfg(BamActuatorCfg):
 class BacklashEncoderBamActuator(FrictionDRBamActuator):
     """固件 PD 通过 backlash 读取编码器的 FrictionDRBamActuator.
 
-    Backlash 模型 (robot_allcollisions_backlash.xml) 在每个 servo 关节串联了一个
-    非驱动的 ``passive_<joint>_backlash`` 铰链: servo 关节是电机输出, backlash 关节
-    是它与连杆之间的间隙, 连杆角度为两者之和.
+Backlash 模型 (robot_groundcontact_backlash.xml) 在每个 servo 关节串联
+    了一个非驱动的 ``passive_<joint>_backlash`` 铰链: servo 关节是电机输出,
+    backlash 关节是它与连杆之间的间隙, 连杆角度为两者之和.
 
     真实 servo 上磁性编码器位于该间隙的输出侧, 所以固件位置环在
     main+backlash 上闭环 — 当 servo 穿过死区时测量位置 (因而 PD 误差)

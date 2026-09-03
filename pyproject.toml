@@ -51,6 +51,9 @@ mjlab_microduck = "mjlab_microduck.tasks"
 # --hf-jobs is intercepted from the `mjlab.tasks` entry point above
 # (train_hook.py), not here. Locked by tests/test_hf_jobs_flag.py.
 train = "mjlab_microduck.train_cli:main"
+# 为真实的 `robotd` 提供一个模拟机身 - 参考 sim/body_server.py.
+duck-body = "mjlab_microduck.sim.body_server:main"
+publish = "mjlab_microduck.publish.cli:main"
 
 [tool.uv]
 override-dependencies = [

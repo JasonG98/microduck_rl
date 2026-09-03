@@ -14,28 +14,33 @@ from mjlab_microduck.actuator import (
 _ROBOT_DIR: Path = Path(__file__).parent / "microduck"
 
 MICRODUCK_WALK_XML: Path = _ROBOT_DIR / "robot_walk.xml"
-# 全碰撞模型, 被 standup / ground-pick / walk-rollers 任务共用.
+# Ground-contact 模型 (旧称 "allcollisions"): 精选碰撞集, 覆盖落地接触任务中
+# 触地的部件 (脚底, 腿, 躯干外壳, 头壳, 下颌, 电池, 髋部) — 而非每个 geom.
+# 被 standup / ground-pick / sitstand / roulade / walk-rollers 任务共用.
+MICRODUCK_GROUNDCONTACT_XML: Path = _ROBOT_DIR / "robot_groundcontact.xml"
+# 真正的全碰撞模型: 每个部件都带碰撞 geom (70 geoms, 37 meshes; 与所有变体一致,
+# power_support 降级为 self_collision_only). 目前还没有任务使用它 — 2026-09
+# 导出, 供未来需要完整接触的 env 使用.
 MICRODUCK_ALLCOLLISIONS_XML: Path = _ROBOT_DIR / "robot_allcollisions.xml"
 # 70mm / 15g 球道具, 用于 BallKick 任务.
 MICRODUCK_BALL_XML: Path = _ROBOT_DIR / "ball.xml"
 # 轮滑模型: 14 个驱动关节 + 被动轮铰链 (passive_*wheel).
-MICRODUCK_ALLCOLLISIONS_ROLLERS_XML: Path = _ROBOT_DIR / "robot_allcollisions_rollers.xml"
-# Backlash 模型: 每个 servo 关节串联一个非驱动的 passive_<joint>_backlash
-# 铰链 (±1° 间隙, 共 2°). 通过 config_mjcf_{allcollisions,walk}_backlash.json
-# 导出 (add_backlash.py 后处理器).
-MICRODUCK_ALLCOLLISIONS_BACKLASH_XML: Path = _ROBOT_DIR / "robot_allcollisions_backlash.xml"
+MICRODUCK_GROUNDCONTACT_ROLLERS_XML: Path = _ROBOT_DIR / "robot_groundcontact_rollers.xml"
+# Backlash 模型: 每个 servo 关节串联一个未驱动的 passive_<joint>_backlash
+# 铰链 (±1° 间隙, 共 2°). 通过
+# config_mjcf_{groundcontact,walk}_backlash.json 导出 (add_backlash.py 后处理器).
+MICRODUCK_GROUNDCONTACT_BACKLASH_XML: Path = _ROBOT_DIR / "robot_groundcontact_backlash.xml"
 MICRODUCK_WALK_BACKLASH_XML: Path = _ROBOT_DIR / "robot_walk_backlash.xml"
-MICRODUCK_ALLCOLLISIONS_ROLLERS_BACKLASH_XML: Path = _ROBOT_DIR / "robot_allcollisions_rollers_backlash.xml"
+MICRODUCK_GROUNDCONTACT_ROLLERS_BACKLASH_XML: Path = _ROBOT_DIR / "robot_groundcontact_rollers_backlash.xml"
 
 assert MICRODUCK_WALK_XML.exists(), f"XML not found: {MICRODUCK_WALK_XML}"
+assert MICRODUCK_GROUNDCONTACT_XML.exists(), f"XML not found: {MICRODUCK_GROUNDCONTACT_XML}"
 assert MICRODUCK_ALLCOLLISIONS_XML.exists(), f"XML not found: {MICRODUCK_ALLCOLLISIONS_XML}"
 assert MICRODUCK_BALL_XML.exists(), f"XML not found: {MICRODUCK_BALL_XML}"
-assert MICRODUCK_ALLCOLLISIONS_ROLLERS_XML.exists(), f"XML not found: {MICRODUCK_ALLCOLLISIONS_ROLLERS_XML}"
-assert MICRODUCK_ALLCOLLISIONS_BACKLASH_XML.exists(), f"XML not found: {MICRODUCK_ALLCOLLISIONS_BACKLASH_XML}"
+assert MICRODUCK_GROUNDCONTACT_ROLLERS_XML.exists(), f"XML not found: {MICRODUCK_GROUNDCONTACT_ROLLERS_XML}"
+assert MICRODUCK_GROUNDCONTACT_BACKLASH_XML.exists(), f"XML not found: {MICRODUCK_GROUNDCONTACT_BACKLASH_XML}"
 assert MICRODUCK_WALK_BACKLASH_XML.exists(), f"XML not found: {MICRODUCK_WALK_BACKLASH_XML}"
-assert MICRODUCK_ALLCOLLISIONS_ROLLERS_BACKLASH_XML.exists(), (
-    f"XML not found: {MICRODUCK_ALLCOLLISIONS_ROLLERS_BACKLASH_XML}"
-)
+assert MICRODUCK_GROUNDCONTACT_ROLLERS_BACKLASH_XML.exists(), f"XML not found: {MICRODUCK_GROUNDCONTACT_ROLLERS_BACKLASH_XML}"
 
 
 def get_walk_spec() -> mujoco.MjSpec:
@@ -44,20 +49,25 @@ def get_walk_spec() -> mujoco.MjSpec:
 
 
 def get_standup_spec() -> mujoco.MjSpec:
-    """将全碰撞 standup 模型 MJCF 加载为 MjSpec."""
-    return mujoco.MjSpec.from_file(str(MICRODUCK_ALLCOLLISIONS_XML))
+    """将 standup (ground-contact) 模型 MJCF 加载为 MjSpec."""
+    return mujoco.MjSpec.from_file(str(MICRODUCK_GROUNDCONTACT_XML))
 
 
 def get_ground_pick_spec() -> mujoco.MjSpec:
-    """将 ground-pick (全碰撞) 模型 MJCF 加载为 MjSpec."""
-    return mujoco.MjSpec.from_file(str(MICRODUCK_ALLCOLLISIONS_XML))
+    """将 ground-pick (ground-contact) 模型 MJCF 加载为 MjSpec."""
+    return mujoco.MjSpec.from_file(str(MICRODUCK_GROUNDCONTACT_XML))
 
 
 def get_walk_rollers_spec() -> mujoco.MjSpec:
     """将轮滑 walk 模型 MJCF 加载为 MjSpec."""
-    # 注意: 曾经加载的是 robot_allcollisions.xml (无轮子) — 轮子环境
+    # 注意: 曾经加载的是 robot_groundcontact.xml (无轮子) — 轮子环境
     # 静默地跑在了无轮的 standup 模型上.
-    return mujoco.MjSpec.from_file(str(MICRODUCK_ALLCOLLISIONS_ROLLERS_XML))
+    return mujoco.MjSpec.from_file(str(MICRODUCK_GROUNDCONTACT_ROLLERS_XML))
+
+
+def get_allcollisions_spec() -> mujoco.MjSpec:
+    """将全碰撞模型 MJCF 加载为 MjSpec."""
+    return mujoco.MjSpec.from_file(str(MICRODUCK_ALLCOLLISIONS_XML))
 
 
 def get_ball_spec() -> mujoco.MjSpec:
@@ -66,8 +76,8 @@ def get_ball_spec() -> mujoco.MjSpec:
 
 
 def get_backlash_spec() -> mujoco.MjSpec:
-    """将全碰撞 backlash 模型 MJCF 加载为 MjSpec."""
-    return mujoco.MjSpec.from_file(str(MICRODUCK_ALLCOLLISIONS_BACKLASH_XML))
+    """将 ground-contact backlash 模型 MJCF 加载为 MjSpec."""
+    return mujoco.MjSpec.from_file(str(MICRODUCK_GROUNDCONTACT_BACKLASH_XML))
 
 
 def get_walk_backlash_spec() -> mujoco.MjSpec:
@@ -77,7 +87,7 @@ def get_walk_backlash_spec() -> mujoco.MjSpec:
 
 def get_rollers_backlash_spec() -> mujoco.MjSpec:
     """将轮滑 backlash 模型 MJCF 加载为 MjSpec."""
-    return mujoco.MjSpec.from_file(str(MICRODUCK_ALLCOLLISIONS_ROLLERS_BACKLASH_XML))
+    return mujoco.MjSpec.from_file(str(MICRODUCK_GROUNDCONTACT_ROLLERS_BACKLASH_XML))
 
 
 HOME_FRAME = EntityCfg.InitialStateCfg(
@@ -196,11 +206,10 @@ MICRODUCK_GROUND_PICK_ROBOT_CFG = EntityCfg(
     ),
 )
 
-
 # Backlash 机器人: 基础模型 + 每个 servo 一个 ±1° 串联 backlash 铰链.
 # 编码器穿过 backlash 读取 (BacklashEncoderBamActuator 反馈 +
 # joint_pos/vel_rel_backlash 观测 — 见 tasks/backlash.py).
-# allcollisions 变体 → VelStand/StandUp backlash 任务 (镜像
+# ground-contact 变体 → VelStand/StandUp backlash 任务 (镜像
 # MICRODUCK_STANDUP_ROBOT_CFG); walk 变体 → Velocity backlash
 # 任务 (镜像 MICRODUCK_WALK_ROBOT_CFG, 让 backlash 与基础对比
 # 不被碰撞模型混淆).

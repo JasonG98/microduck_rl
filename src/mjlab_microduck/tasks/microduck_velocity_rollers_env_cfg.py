@@ -3,7 +3,7 @@
 已迁移到 mjlab 1.3.0 + 标准 BAM (2026-07), 与 velocity 环境的 sim2real 机制
 对齐, 并针对新 roller 模型更新:
 
-  - `get_walk_rollers_spec` 现在加载 `robot_allcollisions_rollers.xml`
+- `get_walk_rollers_spec` 现在加载 `robot_groundcontact_rollers.xml`
     (之前静默加载无轮 standup 模型): 14 个驱动关节 + 4 个被动轮
     (passive_{L,R}{F,R}wheel), 每个刀刃两个, 关节顺序中交叉排列 (在每个踝
     之后) — 一切都按 NAME 而非索引解析关节.
@@ -11,7 +11,7 @@
     不匹配, 且无关节摩擦 DR).
   - Obs 迁移到统一 61D 布局 (twist + 零填充 head/body 指令槽位), 使 roller
     policy 通过 runtime 的 --new-cmd-obs 路径加载. 对称性关闭
-    (SYMMETRY_CFG 是为旧的 51D 布局硬编码的).
+    (SYMMETRY_CFG 是为旧 51D 布局硬编码的).
   - DR/noise/delays 与 velocity 环境的 FIXED (非累积, 每环境验证) 版本对齐;
     轮轴承 frictionloss DR 保留 (被动轮上的 dr.dof_frictionloss + 现有课程).
 
