@@ -224,7 +224,7 @@ def test_a_legacy_51d_graph_is_refused_before_upload(tmp_path):
 
 def test_a_wrong_action_width_is_refused(tmp_path):
     path = _tiny_policy(tmp_path / "wide.onnx", action_len=16)
-    with pytest.raises(m.ManifestError, match="16 actions"):
+    with pytest.raises(m.ManifestError, match="16 个动作"):
         m.check_onnx(path)
 
 
@@ -241,7 +241,7 @@ def test_a_constant_network_fails_the_smoke_run(tmp_path):
     model.ir_version = 8
     path = tmp_path / "dead.onnx"
     onnx.save(model, str(path))
-    with pytest.raises(m.ManifestError, match="never changes"):
+    with pytest.raises(m.ManifestError, match="网络输出从未改变"):
         m.smoke_run_onnx(path)
 
 
