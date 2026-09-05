@@ -34,9 +34,7 @@ ENABLE_IMU_ORIENTATION_RANDOMIZATION = True  # 匹配 velocity: obs 级每环境
 ENABLE_ENCODER_BIAS = True  # 匹配 velocity: 每环境关节编码器偏移 (actor obs)
 
 # ── 范围 (与 velocity 环境对齐) ──────────────────────────────────────────────
-COM_RANDOMIZATION_RANGE = (
-    0.003  # 通过 com_range 课程渐升到 0.015 (velocity 2026-07 审计上限; 此处原为 0.02)
-)
+COM_RANDOMIZATION_RANGE = 0.003  # 通过 com_range 课程渐升到 0.015 (velocity 2026-07 审计上限; 此处原为 0.02)
 HEAD_COM_RANDOMIZATION_RANGE = 0.003  # 通过 head_com_range 课程渐升到 0.01
 MASS_INERTIA_RANDOMIZATION_RANGE = (0.95, 1.05)
 ARMATURE_RANDOMIZATION_RANGE = (0.9, 1.1)
@@ -49,7 +47,9 @@ VELOCITY_PUSH_INTERVAL_S = (3.0, 6.0)
 # 课程仍按 0 → ±0.08 → 此最终值渐升, 使坐起 bootstrap 不从 step 0 起被推
 # 来推去 (velocity 从 step 0 起全强度推力, 但它从站立开始, 非坐/俯卧).
 VELOCITY_PUSH_RANGE = (-0.3, 0.3)
-IMU_ORIENTATION_RANDOMIZATION_ANGLE = 6.0  # 匹配 velocity (原为 2.0 — 审计前值; 真实 IMU 有 ~5° 系统俯仰误差 + 估计器漂移, 2° 训练的带太窄)
+IMU_ORIENTATION_RANDOMIZATION_ANGLE = (
+    6.0  # 匹配 velocity (原为 2.0 — 审计前值; 真实 IMU 有 ~5° 系统俯仰误差 + 估计器漂移, 2° 训练的带太窄)
+)
 
 # Episode 长度: 足够用于平缓上升 + 短暂稳定.
 EPISODE_LENGTH_S = 6.0

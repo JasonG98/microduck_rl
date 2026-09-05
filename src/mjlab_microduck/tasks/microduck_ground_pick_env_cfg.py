@@ -181,7 +181,7 @@ def make_microduck_ground_pick_env_cfg(play: bool = False, rough: bool = False) 
         func=microduck_mdp.mouth_ground_proximity_phased,
         weight=3.0,
         params={
-            "asset_cfg": SceneEntityCfg("robot", site_names=["mouth_tip"]),
+            "asset_cfg": SceneEntityCfg("robot", site_names=("mouth_tip",)),
             "std": 0.10,
             "target_height": 0.0,
             "command_name": "twist",
@@ -199,7 +199,7 @@ def make_microduck_ground_pick_env_cfg(play: bool = False, rough: bool = False) 
         func=microduck_mdp.mouth_perpendicular_phased,
         weight=2.0,
         params={
-            "asset_cfg": SceneEntityCfg("robot", site_names=["mouth_tip"]),
+            "asset_cfg": SceneEntityCfg("robot", site_names=("mouth_tip",)),
             "command_name": "twist",
             "descent_end": DESCENT_END,
             "hold_end": HOLD_END,
@@ -273,7 +273,7 @@ def make_microduck_ground_pick_env_cfg(play: bool = False, rough: bool = False) 
         func=microduck_mdp.apply_mouth_payload_force,
         weight=0.0,
         params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=["jaw_soft"], site_names=["mouth_tip"]),
+            "asset_cfg": SceneEntityCfg("robot", body_names=("jaw_soft",), site_names=("mouth_tip",)),
             "command_name": "twist",
             "hold_end": HOLD_END,
         },
@@ -308,7 +308,7 @@ def make_microduck_ground_pick_env_cfg(play: bool = False, rough: bool = False) 
         func=microduck_mdp.feet_flat_penalty,
         weight=-2.0,
         params={
-            "asset_cfg": SceneEntityCfg("robot", site_names=["left_foot", "right_foot"]),
+            "asset_cfg": SceneEntityCfg("robot", site_names=("left_foot", "right_foot")),
         },
     )
 

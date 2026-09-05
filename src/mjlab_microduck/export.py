@@ -17,8 +17,6 @@ from typing import Literal
 
 import torch
 import tyro
-from rsl_rl.runners import OnPolicyRunner
-
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg, load_runner_cls
@@ -26,7 +24,7 @@ from mjlab.tasks.tracking.mdp import MotionCommandCfg
 from mjlab.utils.os import get_checkpoint_path, get_wandb_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.utils.wrappers import VideoRecorder
-from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
+from rsl_rl.runners import OnPolicyRunner
 
 
 @dataclass(frozen=True)
@@ -35,7 +33,7 @@ class ExportConfig:
     agent: Literal["zero", "random", "trained"] = "trained"
     registry_name: str | None = None
     wandb_run_path: str | None = None
-    checkpoint: int | None = None      # 按迭代编号选择检查点 (例如 3000)
+    checkpoint: int | None = None  # 按迭代编号选择检查点 (例如 3000)
     checkpoint_file: str | None = None
     motion_file: str | None = None
     num_envs: int | None = None
@@ -101,16 +99,14 @@ def run_export(task_id: str, cfg: ExportConfig) -> ExportResult:
 
         # 检查 motion file 是否已设置且存在
         motion_file_already_set = (
-            hasattr(motion_cmd, 'motion_file')
+            hasattr(motion_cmd, "motion_file")
             and motion_cmd.motion_file is not None
             and Path(motion_cmd.motion_file).exists()
         )
 
         if DUMMY_MODE:
             if not cfg.registry_name:
-                raise ValueError(
-                    "使用 dummy agents 时, 跟踪任务需要 `registry_name`."
-                )
+                raise ValueError("使用 dummy agents 时, 跟踪任务需要 `registry_name`.")
             # 检查 registry name 是否包含 alias, 若不包含则追加 ":latest".
             registry_name = cfg.registry_name
             if ":" not in registry_name:
@@ -160,6 +156,7 @@ def run_export(task_id: str, cfg: ExportConfig) -> ExportResult:
             checkpoint_filename = f"model_{cfg.checkpoint}.pt"
             if cfg.wandb_run_path is not None:
                 import wandb
+
                 api = wandb.Api()
                 wandb_run = api.run(str(cfg.wandb_run_path))
                 run_id = cfg.wandb_run_path.split("/")[-1]
@@ -171,31 +168,22 @@ def run_export(task_id: str, cfg: ExportConfig) -> ExportResult:
                     available = [f.name for f in wandb_run.files() if "model" in f.name]
                     if checkpoint_filename not in available:
                         raise FileNotFoundError(
-                            f"在 wandb run 中未找到 checkpoint '{checkpoint_filename}'. "
-                            f"可用: {sorted(available)}"
+                            f"在 wandb run 中未找到 checkpoint '{checkpoint_filename}'. 可用: {sorted(available)}"
                         )
                     wandb_run.file(checkpoint_filename).download(str(download_dir), replace=True)
                     print(f"[INFO]: 正在加载 checkpoint: {checkpoint_filename} (run: {run_id}, 已下载)")
             else:
-                resume_path = get_checkpoint_path(
-                    log_root_path, checkpoint=re.escape(checkpoint_filename)
-                )
+                resume_path = get_checkpoint_path(log_root_path, checkpoint=re.escape(checkpoint_filename))
                 print(f"[INFO]: 正在加载 checkpoint: {resume_path.name}")
         else:
             if cfg.wandb_run_path is None:
-                raise ValueError(
-                    "未提供 `checkpoint_file` 时需要 `wandb_run_path`."
-                )
-            resume_path, was_cached = get_wandb_checkpoint_path(
-                log_root_path, Path(cfg.wandb_run_path)
-            )
+                raise ValueError("未提供 `checkpoint_file` 时需要 `wandb_run_path`.")
+            resume_path, was_cached = get_wandb_checkpoint_path(log_root_path, Path(cfg.wandb_run_path))
             # 从路径提取 run_id 和 checkpoint 名称用于展示.
             run_id = resume_path.parent.name
             checkpoint_name = resume_path.name
             cached_str = "已缓存" if was_cached else "已下载"
-            print(
-                f"[INFO]: 正在加载 checkpoint: {checkpoint_name} (run: {run_id}, {cached_str})"
-            )
+            print(f"[INFO]: 正在加载 checkpoint: {checkpoint_name} (run: {run_id}, {cached_str})")
         log_dir = resume_path.parent
 
     if cfg.num_envs is not None:
@@ -207,9 +195,7 @@ def run_export(task_id: str, cfg: ExportConfig) -> ExportResult:
 
     render_mode = "rgb_array" if (TRAINED_MODE and cfg.video) else None
     if cfg.video and DUMMY_MODE:
-        print(
-            "[WARN] 使用 dummy agents 时视频录制被禁用 (无 checkpoint/log_dir)."
-        )
+        print("[WARN] 使用 dummy agents 时视频录制被禁用 (无 checkpoint/log_dir).")
     env = ManagerBasedRlEnv(cfg=env_cfg, device=device, render_mode=render_mode)
 
     if TRAINED_MODE and cfg.video:
@@ -233,7 +219,7 @@ def run_export(task_id: str, cfg: ExportConfig) -> ExportResult:
                     del obs
                     return torch.zeros(action_shape, device=env.unwrapped.device)
 
-            policy = PolicyZero()
+            PolicyZero()
         else:
 
             class PolicyRandom:
@@ -241,12 +227,12 @@ def run_export(task_id: str, cfg: ExportConfig) -> ExportResult:
                     del obs
                     return 2 * torch.rand(action_shape, device=env.unwrapped.device) - 1
 
-            policy = PolicyRandom()
+            PolicyRandom()
     else:
         runner_cls = load_runner_cls(task_id) or OnPolicyRunner
         runner = runner_cls(env, asdict(agent_cfg), device=device)
         runner.load(str(resume_path), map_location=device)
-        policy = runner.get_inference_policy(device=device)
+        runner.get_inference_policy(device=device)
 
     # mjlab 1.3.0: ONNX 导出 + metadata 已迁移到 mjlab.rl.exporter_utils, 使用
     # runner 内置的 export_policy_to_onnx. 观测归一化会自动烧录进导出的图 -
@@ -254,7 +240,7 @@ def run_export(task_id: str, cfg: ExportConfig) -> ExportResult:
     # obs_normalization=True), 因此 export_policy_to_onnx 输出的是
     # actor(normalizer(obs)). 无需手动处理归一化 (旧的
     # export_velocity_policy_as_onnx 路径已移除).
-    from mjlab.rl.exporter_utils import get_base_metadata, attach_metadata_to_onnx
+    from mjlab.rl.exporter_utils import attach_metadata_to_onnx, get_base_metadata
 
     onnx_path = os.path.abspath(cfg.onnx_file)
     path = os.path.dirname(onnx_path)

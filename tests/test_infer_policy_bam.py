@@ -21,9 +21,7 @@ REPO = Path(__file__).resolve().parents[1]
 
 @pytest.fixture(scope="module")
 def ip():
-    spec = importlib.util.spec_from_file_location(
-        "infer_policy", REPO / "scripts" / "infer_policy.py"
-    )
+    spec = importlib.util.spec_from_file_location("infer_policy", REPO / "scripts" / "infer_policy.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -31,15 +29,16 @@ def ip():
 
 def test_cpu_bam_constants_mirror_training_cfg(ip):
     from bam.mjlab import BamActuator
+
     from mjlab_microduck.robot.microduck_constants import _BAM_ACTUATOR_KWARGS as k
 
-    assert ip.BAM_MOTOR_NAME == k["motor_name"]
-    assert ip.BAM_MODEL == k["model"]
-    assert ip.BAM_KP_FW == k["kp_fw"]
-    assert ip.BAM_VIN_RANGE == k["vin_range"]
-    assert ip.BAM_VIN_DROP_GAIN_RANGE == k["vin_drop_gain_range"]
-    assert ip.BAM_VIN_MIN == k["vin_min"]
-    assert ip.BAM_MAX_CURRENT == k.get("max_current")
+    assert k["motor_name"] == ip.BAM_MOTOR_NAME
+    assert k["model"] == ip.BAM_MODEL
+    assert k["kp_fw"] == ip.BAM_KP_FW
+    assert k["vin_range"] == ip.BAM_VIN_RANGE
+    assert k["vin_drop_gain_range"] == ip.BAM_VIN_DROP_GAIN_RANGE
+    assert k["vin_min"] == ip.BAM_VIN_MIN
+    assert k.get("max_current") == ip.BAM_MAX_CURRENT
     assert ip.BAM_STIFF_SOLREF_FRICTION == BamActuator._STIFF_SOLREF_FRICTION
     assert ip.BAM_STIFF_SOLIMP_FRICTION == BamActuator._STIFF_SOLIMP_FRICTION
 

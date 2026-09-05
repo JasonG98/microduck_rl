@@ -35,6 +35,7 @@ daemon 提供机体与它今天所做的 sim2real 是镜像关系. daemon 一侧
 **是重力, 不只是朝向.** 策略在躯干坐标系中观测投影重力. MuJoCo 给出的是朝向四元数, 因此这里做
 旋转 -- 与 IMU 的 SFLP 滤波器在机器人上做的运算相同, 只是在同一根线的另一端.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -65,18 +66,42 @@ HOME_TRUNK_Z = 0.125
 # `duck_ipc_proto::JOINT_NAMES`, 它是协议的一部分: 线上每个位置数组都按它来索引. 在这里复制
 # 而不是共享, 因为两个仓库无法共享常量 -- 启动时再与模型比对, 是仅次于共享的次优方案.
 JOINT_NAMES = (
-    "left_hip_yaw", "left_hip_roll", "left_hip_pitch", "left_knee", "left_ankle",
-    "neck_pitch", "head_pitch", "head_yaw", "head_roll", "mouth",
-    "right_hip_yaw", "right_hip_roll", "right_hip_pitch", "right_knee", "right_ankle",
+    "left_hip_yaw",
+    "left_hip_roll",
+    "left_hip_pitch",
+    "left_knee",
+    "left_ankle",
+    "neck_pitch",
+    "head_pitch",
+    "head_yaw",
+    "head_roll",
+    "mouth",
+    "right_hip_yaw",
+    "right_hip_roll",
+    "right_hip_pitch",
+    "right_knee",
+    "right_ankle",
 )
 MOUTH_INDEX = JOINT_NAMES.index("mouth")
 
 # `duck_control::DEFAULT_POSITION`, 以及 `infer_policy.py` 中把 mouth 放回去后的 `DEFAULT_POSE`.
 # 右腿是镜像而非对称 -- 值得阅读而不是想当然.
 HOME_POSE = (
-    0.0, -0.0873, -0.4579, -0.0049, 0.4530,
-    0.3491, 0.3491, 0.0, 0.0, 0.0,
-    0.0, 0.0873, 0.4579, 0.0049, -0.4530,
+    0.0,
+    -0.0873,
+    -0.4579,
+    -0.0049,
+    0.4530,
+    0.3491,
+    0.3491,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0873,
+    0.4579,
+    0.0049,
+    -0.4530,
 )
 
 SCENES = Path(__file__).resolve().parents[1] / "robot" / "microduck"
@@ -131,9 +156,7 @@ def pose_table(scene: Path, keyframe: str) -> tuple[dict[str, float] | None, flo
     model = mujoco.MjModel.from_xml_path(str(scene))
     names = [mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_KEY, i) for i in range(model.nkey)]
     if keyframe not in names:
-        raise SystemExit(
-            f"{scene.name} 中没有关键帧 {keyframe!r}. 它有: {', '.join(n for n in names if n)}"
-        )
+        raise SystemExit(f"{scene.name} 中没有关键帧 {keyframe!r}. 它有: {', '.join(n for n in names if n)}")
     qpos = model.key_qpos[names.index(keyframe)]
     table = {}
     for joint in range(model.njnt):
@@ -216,12 +239,8 @@ class Body:
         if not self.actuators:
             raise SystemExit(f"鸭子 {index} (前缀 {self.prefix!r}) 没有任何可驱动的关节")
 
-        self.qpos_adr = np.array(
-            [model.jnt_qposadr[model.actuator_trnid[a, 0]] for a in self.actuators]
-        )
-        self.qvel_adr = np.array(
-            [model.jnt_dofadr[model.actuator_trnid[a, 0]] for a in self.actuators]
-        )
+        self.qpos_adr = np.array([model.jnt_qposadr[model.actuator_trnid[a, 0]] for a in self.actuators])
+        self.qvel_adr = np.array([model.jnt_dofadr[model.actuator_trnid[a, 0]] for a in self.actuators])
         # 深度传感器, 位于模型自己的 `tof` site 上 -- 所以转动的头部会带着它一起转, 这正是
         # `robot.look` 扫描房间的方式.
         self.tof = Tof(model, ident(mujoco.mjtObj.mjOBJ_SITE, "tof"), seed=index)
@@ -392,9 +411,7 @@ class Handler(socketserver.StreamRequestHandler):
         if op == "hello":
             asked = request.get("protocol")
             if asked != PROTOCOL:
-                raise ValueError(
-                    f"daemon 讲协议 {asked}, 而这个模拟器讲 {PROTOCOL}"
-                )
+                raise ValueError(f"daemon 讲协议 {asked}, 而这个模拟器讲 {PROTOCOL}")
             return {"protocol": PROTOCOL}
         if op == "read":
             return body.sensors()
@@ -432,9 +449,7 @@ def run(world: World, headless: bool) -> None:
             import mujoco.viewer
 
             # 没有侧边面板: 这个窗口用于观察鸭子, 而面板本来要驱动的所有东西都属于 daemon.
-            viewer = mujoco.viewer.launch_passive(
-                world.model, world.data, show_left_ui=False, show_right_ui=False
-            )
+            viewer = mujoco.viewer.launch_passive(world.model, world.data, show_left_ui=False, show_right_ui=False)
         except Exception as error:
             print(f"== 无查看器 ({error}); 以降无头模式运行", flush=True)
 
@@ -486,8 +501,7 @@ def main() -> None:
     parser.add_argument(
         "--limp",
         action="store_true",
-        help="以无力矩启动, 这样鸭子会就地瘫倒 -- 一台被发现倒在地上的机器人, 正是 "
-        "`robotd` 的坐姿启动路径所处理的",
+        help="以无力矩启动, 这样鸭子会就地瘫倒 -- 一台被发现倒在地上的机器人, 正是 `robotd` 的坐姿启动路径所处理的",
     )
     parser.add_argument(
         "--keyframe",
@@ -500,8 +514,7 @@ def main() -> None:
 
     if not args.scene.exists():
         raise SystemExit(
-            f"{args.scene} 处没有场景. 可用的:\n  "
-            + "\n  ".join(sorted(p.name for p in SCENES.glob("scene*.xml")))
+            f"{args.scene} 处没有场景. 可用的:\n  " + "\n  ".join(sorted(p.name for p in SCENES.glob("scene*.xml")))
         )
     if args.ducks < 1:
         raise SystemExit("--ducks 至少需要一只鸭子")

@@ -33,11 +33,11 @@ MICRODUCK_BALL_XML = "src/mjlab_microduck/robot/microduck/scene_ball.xml"
 # 由 tests/test_infer_policy_bam.py 锁定.
 BAM_MOTOR_NAME = "xl330"
 BAM_MODEL = "m6"
-BAM_KP_FW = 200.0                 # microduck 保留的固件刚度
-BAM_VIN_RANGE = (6.5, 8.2)        # 训练中 per-env 的电池电压 DR
+BAM_KP_FW = 200.0  # microduck 保留的固件刚度
+BAM_VIN_RANGE = (6.5, 8.2)  # 训练中 per-env 的电池电压 DR
 BAM_VIN_DROP_GAIN_RANGE = (0.0, 0.2)  # 负载相关的电压跌落 V_drop = gain * sum|tau|
-BAM_VIN_MIN = 6.0                 # 跌落后的有效电压下限
-BAM_MAX_CURRENT = None            # 训练时没有固件电流限制器
+BAM_VIN_MIN = 6.0  # 跌落后的有效电压下限
+BAM_MAX_CURRENT = None  # 训练时没有固件电流限制器
 # 刚性关节摩擦约束, 来自 bam.mjlab.BamActuator
 # (训练时 stiff_frictionloss=True): warp 没有 noslip 求解器, 所以 BAM 会
 # 加固 frictionloss 使静态保持的关节不会爬行. 这里镜像它, 让 CPU 和 warp
@@ -49,6 +49,7 @@ BAM_STIFF_SOLIMP_FRICTION = (0.99, 0.9999, 0.001, 0.5, 2.0)
 def load_bam_model(kp_fw: float, vin: float, max_current):
     """构建 BAM M6 模型 + XL330 电压控制执行器."""
     from bam.model import load_model
+
     bam_model = load_model(motor_name=BAM_MOTOR_NAME, model=BAM_MODEL)
     bam_model.actuator.kp = kp_fw
     bam_model.actuator.vin = vin
@@ -95,19 +96,20 @@ def load_mujoco_with_bam(xml_path: str, bam_model, timestep: float, vin_drop_gai
     model = spec.compile()
     model.opt.timestep = timestep
     data = mujoco.MjData(model)
-    bam_ctrl = MujocoController(bam_model, names, model, data,
-                                vin_drop_gain=vin_drop_gain, vin_min=vin_min)
-    print(f"BAM {BAM_MODEL} 执行器, 共 {len(names)} 个关节: kt={kt:.4f} R={R:.4f} "
-          f"vin={bam_model.actuator.vin:.2f}V kp_fw={bam_model.actuator.kp:.0f} "
-          f"vin_drop_gain={vin_drop_gain} vin_min={vin_min} "
-          f"max_current={bam_model.actuator.max_current} forcerange=+/-{force_limit:.3f}Nm "
-          f"armature={bam_model.actuator.get_extra_inertia():.2e}")
+    bam_ctrl = MujocoController(bam_model, names, model, data, vin_drop_gain=vin_drop_gain, vin_min=vin_min)
+    print(
+        f"BAM {BAM_MODEL} 执行器, 共 {len(names)} 个关节: kt={kt:.4f} R={R:.4f} "
+        f"vin={bam_model.actuator.vin:.2f}V kp_fw={bam_model.actuator.kp:.0f} "
+        f"vin_drop_gain={vin_drop_gain} vin_min={vin_min} "
+        f"max_current={bam_model.actuator.max_current} forcerange=+/-{force_limit:.3f}Nm "
+        f"armature={bam_model.actuator.get_extra_inertia():.2e}"
+    )
     return model, data, bam_ctrl, names
 
 
 # 躯干姿态命令常量 (必须与训练常量一致)
-BODY_CMD_MAX_Z = 0.03              # ±30 mm
-BODY_CMD_MAX_XY = 0.02             # ±20 mm
+BODY_CMD_MAX_Z = 0.03  # ±30 mm
+BODY_CMD_MAX_XY = 0.02  # ±20 mm
 BODY_CMD_MAX_ANGLE = math.radians(30)  # ±30°
 
 # 踢球行为的球初始放置 (必须与 microduck_ball_kick_env_cfg 的
@@ -217,15 +219,30 @@ class TerminalInput:
 class PolicyInference:
     """在 MuJoCo 模型中运行 ONNX 策略, 支持键盘驱动的命令切换."""
 
-    def __init__(self, model, data, walking_onnx_path=None, action_scale=1.0, bam_ctrl=None,
-                 delay_min_lag=0, delay_max_lag=0,
-                 standing_onnx_path=None, switch_threshold=0.05,
-                 use_projected_gravity=False, ground_pick_onnx_path=None, ground_pick_period=4.0,
-                 sit_onnx_path=None, new_cmd_obs=False, slope_onnx_path=None,
-                 sitstand_onnx_path=None,
-                 kick_left_onnx_path=None, kick_right_onnx_path=None,
-                 roulade_onnx_path=None,
-                 kick_duration=3.0, roulade_duration=2.0):
+    def __init__(
+        self,
+        model,
+        data,
+        walking_onnx_path=None,
+        action_scale=1.0,
+        bam_ctrl=None,
+        delay_min_lag=0,
+        delay_max_lag=0,
+        standing_onnx_path=None,
+        switch_threshold=0.05,
+        use_projected_gravity=False,
+        ground_pick_onnx_path=None,
+        ground_pick_period=4.0,
+        sit_onnx_path=None,
+        new_cmd_obs=False,
+        slope_onnx_path=None,
+        sitstand_onnx_path=None,
+        kick_left_onnx_path=None,
+        kick_right_onnx_path=None,
+        roulade_onnx_path=None,
+        kick_duration=3.0,
+        roulade_duration=2.0,
+    ):
         self.bam_ctrl = bam_ctrl  # bam.mujoco.MujocoController (None 表示遗留 position 执行器)
         self.model = model
         self.data = data
@@ -335,9 +352,7 @@ class PolicyInference:
             if not path:
                 continue
             if not self.new_cmd_obs:
-                raise ValueError(
-                    f"--{name.replace('_', '-')} 策略使用统一的 13D 命令 obs (61D); 需运行 --new-cmd-obs"
-                )
+                raise ValueError(f"--{name.replace('_', '-')} 策略使用统一的 13D 命令 obs (61D); 需运行 --new-cmd-obs")
             print(f"\n正在加载 {name} 策略: {path}")
             self.behavior_sessions[name] = ort.InferenceSession(path)
             self.behavior_durations[name] = duration
@@ -922,56 +937,119 @@ def main():
     """CLI 入口: 在 MuJoCo 仿真中运行 ONNX 策略."""
     parser = argparse.ArgumentParser(description="在 MuJoCo 仿真中运行 ONNX 策略")
     parser.add_argument("--roller", action="store_true", help="使用 roller skate 机器人 XML (robot_walk_rollers.xml)")
-    parser.add_argument("--scene", type=str, default=None, help="场景 XML 路径, 覆盖默认选择 (例如 src/mjlab_microduck/robot/microduck/scene_allcollisions.xml)")
+    parser.add_argument(
+        "--scene",
+        type=str,
+        default=None,
+        help="场景 XML 路径, 覆盖默认选择 (例如 src/mjlab_microduck/robot/microduck/scene_allcollisions.xml)",
+    )
     parser.add_argument("--walking", type=str, default=None, help="walking 策略 ONNX 文件路径")
     parser.add_argument("--standing", "-s", type=str, default=None, help="standing 策略 ONNX 文件路径")
     parser.add_argument("--ground-pick", type=str, default=None, help="ground pick 策略 ONNX 文件路径 (按 G 激活)")
-    parser.add_argument("--sit", type=str, default=None, help="旧的单向 sitting 策略 ONNX 文件路径 (按 Y 坐下, 再按 Y 切回 standing/walking 策略)")
-    parser.add_argument("--sitstand", type=str, default=None, help="sitstand 策略 ONNX 路径 (受控 sit<->stand; 按 Y 坐下, 再按 Y 同一策略起身). 需要 --new-cmd-obs. 可单独运行.")
+    parser.add_argument(
+        "--sit",
+        type=str,
+        default=None,
+        help="旧的单向 sitting 策略 ONNX 文件路径 (按 Y 坐下, 再按 Y 切回 standing/walking 策略)",
+    )
+    parser.add_argument(
+        "--sitstand",
+        type=str,
+        default=None,
+        help="sitstand 策略 ONNX 路径 (受控 sit<->stand; 按 Y 坐下, 再按 Y 同一策略起身). 需要 --new-cmd-obs. 可单独运行.",
+    )
     parser.add_argument("--slope", type=str, default=None, help="slope 策略 ONNX 文件路径 (按 Y 切换)")
-    parser.add_argument("--kick-left", type=str, default=None, help="左脚踢球策略 ONNX 路径 (按 K 触发). 需要 --new-cmd-obs. 加载带球的场景.")
-    parser.add_argument("--kick-right", type=str, default=None, help="右脚踢球策略 ONNX 路径 (按 L 触发). 需要 --new-cmd-obs. 加载带球的场景.")
-    parser.add_argument("--roulade", type=str, default=None, help="roulade (前滚翻) 策略 ONNX 路径 (按 R 触发). 需要 --new-cmd-obs.")
-    parser.add_argument("--kick-duration", type=float, default=3.0, help="踢球策略保持活动的秒数, 之后交回 standing/walking (默认: 3.0)")
-    parser.add_argument("--roulade-duration", type=float, default=2.0, help="roulade 策略保持活动的秒数, 之后交回 standing/walking (默认: 2.0, 约为翻滚本身; 站立/行走策略接管稳定阶段)")
+    parser.add_argument(
+        "--kick-left",
+        type=str,
+        default=None,
+        help="左脚踢球策略 ONNX 路径 (按 K 触发). 需要 --new-cmd-obs. 加载带球的场景.",
+    )
+    parser.add_argument(
+        "--kick-right",
+        type=str,
+        default=None,
+        help="右脚踢球策略 ONNX 路径 (按 L 触发). 需要 --new-cmd-obs. 加载带球的场景.",
+    )
+    parser.add_argument(
+        "--roulade", type=str, default=None, help="roulade (前滚翻) 策略 ONNX 路径 (按 R 触发). 需要 --new-cmd-obs."
+    )
+    parser.add_argument(
+        "--kick-duration", type=float, default=3.0, help="踢球策略保持活动的秒数, 之后交回 standing/walking (默认: 3.0)"
+    )
+    parser.add_argument(
+        "--roulade-duration",
+        type=float,
+        default=2.0,
+        help="roulade 策略保持活动的秒数, 之后交回 standing/walking (默认: 2.0, 约为翻滚本身; 站立/行走策略接管稳定阶段)",
+    )
     parser.add_argument("--lin-vel-x", type=float, default=0.0, help="初始线速度 X 命令 (m/s)")
     parser.add_argument("--lin-vel-y", type=float, default=0.0, help="初始线速度 Y 命令 (m/s)")
     parser.add_argument("--ang-vel-z", type=float, default=0.0, help="初始角速度 Z 命令 (rad/s)")
     parser.add_argument("--action-scale", type=float, default=1.0, help="动作缩放 (默认: 1.0)")
     parser.add_argument("--raw-accelerometer", action="store_true", help="使用原始加速度计而非投影重力")
-    parser.add_argument("--delay", type=int, nargs='*', default=None, help="启用执行器延迟: --delay MIN MAX 或 --delay LAG")
+    parser.add_argument(
+        "--delay", type=int, nargs="*", default=None, help="启用执行器延迟: --delay MIN MAX 或 --delay LAG"
+    )
     parser.add_argument("--debug", action="store_true", help="打印观测和动作")
     parser.add_argument("--save-csv", type=str, default=None, help="将观测和动作保存到 CSV 文件")
     parser.add_argument("--record", type=str, default=None, help="启用录制模式: 在 Ctrl+C 时将观测保存到 pickle 文件")
-    parser.add_argument("--switch-threshold", type=float, default=0.05, help="walking/standing 切换的速度命令幅度阈值 (默认: 0.05)")
-    parser.add_argument("--ground-pick-period", type=float, default=4.0, help="ground pick 相位周期, 单位秒 (默认: 4.0)")
-    parser.add_argument("--new-cmd-obs", action="store_true",
-                        help="使用统一的 13D 命令 obs 布局 (twist+head_pose+body_pose). "
-                             "使用新 pose-command-tracking 设置训练的策略需要此选项. "
-                             "旧策略 (51D obs, head_offset 加到 ctrl) 需要关闭此标志.")
-    parser.add_argument("--no-bam", action="store_true",
-                        help="使用 XML MuJoCo position 执行器, 而非策略训练所用的 BAM M6 "
-                             "电压/摩擦模型.")
-    parser.add_argument("--vin", type=float, default=7.4,
-                        help="BAM 电池电压 [V]. 训练时 per-env 采样范围 "
-                             f"{BAM_VIN_RANGE}; 7.4 = 标称 2S LiPo.")
-    parser.add_argument("--vin-drop-gain", type=float, default=0.1,
-                        help="BAM 负载相关的电压跌落增益 [V/Nm], V = vin - gain*sum|tau|. "
-                             f"训练时 per-env 采样范围 {BAM_VIN_DROP_GAIN_RANGE}. 0 表示禁用.")
-    parser.add_argument("--kp-fw", type=float, default=BAM_KP_FW,
-                        help="BAM 固件 P 增益 (训练使用 %(default)s).")
-    parser.add_argument("--current-limit", type=float, default=0.0,
-                        help="XL330 固件电流限制 [A]. 使用 BAM 时是电压模型的占空比限制器 "
-                             "(按 bam 建模); 使用 --no-bam 时执行器力矩被裁剪到 "
-                             "+/- current_limit * kt. 训练时没有电流限制, 默认关闭 (<=0).")
-    parser.add_argument("--foot-friction", type=float, default=None,
-                        help="覆盖脚部滑动摩擦 (mu), 以模拟真实的高抓地力 "
-                             "PU 鞋底. 训练使用 mu~1.0 (范围 0.7-1.3); 真实 PU 大约 "
-                             "~1.5-2.5. 例如 --foot-friction 2.0")
-    parser.add_argument("--foot-solref", type=float, default=None,
-                        help="软化脚部接触: 脚部 geom 的 solref 时间常数 (s) "
-                             "(默认仿真 ~0.02 = 硬/刚性). 越大越软, 用于模拟 "
-                             "柔顺的 PU 鞋底. 例如 --foot-solref 0.04")
+    parser.add_argument(
+        "--switch-threshold", type=float, default=0.05, help="walking/standing 切换的速度命令幅度阈值 (默认: 0.05)"
+    )
+    parser.add_argument(
+        "--ground-pick-period", type=float, default=4.0, help="ground pick 相位周期, 单位秒 (默认: 4.0)"
+    )
+    parser.add_argument(
+        "--new-cmd-obs",
+        action="store_true",
+        help="使用统一的 13D 命令 obs 布局 (twist+head_pose+body_pose). "
+        "使用新 pose-command-tracking 设置训练的策略需要此选项. "
+        "旧策略 (51D obs, head_offset 加到 ctrl) 需要关闭此标志.",
+    )
+    parser.add_argument(
+        "--no-bam",
+        action="store_true",
+        help="使用 XML MuJoCo position 执行器, 而非策略训练所用的 BAM M6 电压/摩擦模型.",
+    )
+    parser.add_argument(
+        "--vin",
+        type=float,
+        default=7.4,
+        help=f"BAM 电池电压 [V]. 训练时 per-env 采样范围 {BAM_VIN_RANGE}; 7.4 = 标称 2S LiPo.",
+    )
+    parser.add_argument(
+        "--vin-drop-gain",
+        type=float,
+        default=0.1,
+        help="BAM 负载相关的电压跌落增益 [V/Nm], V = vin - gain*sum|tau|. "
+        f"训练时 per-env 采样范围 {BAM_VIN_DROP_GAIN_RANGE}. 0 表示禁用.",
+    )
+    parser.add_argument("--kp-fw", type=float, default=BAM_KP_FW, help="BAM 固件 P 增益 (训练使用 %(default)s).")
+    parser.add_argument(
+        "--current-limit",
+        type=float,
+        default=0.0,
+        help="XL330 固件电流限制 [A]. 使用 BAM 时是电压模型的占空比限制器 "
+        "(按 bam 建模); 使用 --no-bam 时执行器力矩被裁剪到 "
+        "+/- current_limit * kt. 训练时没有电流限制, 默认关闭 (<=0).",
+    )
+    parser.add_argument(
+        "--foot-friction",
+        type=float,
+        default=None,
+        help="覆盖脚部滑动摩擦 (mu), 以模拟真实的高抓地力 "
+        "PU 鞋底. 训练使用 mu~1.0 (范围 0.7-1.3); 真实 PU 大约 "
+        "~1.5-2.5. 例如 --foot-friction 2.0",
+    )
+    parser.add_argument(
+        "--foot-solref",
+        type=float,
+        default=None,
+        help="软化脚部接触: 脚部 geom 的 solref 时间常数 (s) "
+        "(默认仿真 ~0.02 = 硬/刚性). 越大越软, 用于模拟 "
+        "柔顺的 PU 鞋底. 例如 --foot-solref 0.04",
+    )
     args = parser.parse_args()
 
     if not args.walking and not args.standing and not args.sitstand:
@@ -979,9 +1057,7 @@ def main():
     if args.sitstand and not args.new_cmd_obs:
         parser.error("--sitstand 策略使用统一的 13D 命令 obs (61D); 请添加 --new-cmd-obs")
     if (args.kick_left or args.kick_right or args.roulade) and not args.new_cmd_obs:
-        parser.error(
-            "--kick-left/--kick-right/--roulade 策略使用统一的 13D 命令 obs (61D); 请添加 --new-cmd-obs"
-        )
+        parser.error("--kick-left/--kick-right/--roulade 策略使用统一的 13D 命令 obs (61D); 请添加 --new-cmd-obs")
     if (args.kick_left or args.kick_right or args.roulade) and args.roller:
         parser.error("kick/roulade 策略是在 walking 机器人上训练的, 不适用于 roller 模型")
 
@@ -1021,8 +1097,7 @@ def main():
         # 电压 DR 在这里退化为固定的 --vin / --vin-drop-gain (训练时按 env 采样).
         bam_model = load_bam_model(args.kp_fw, args.vin, args.current_limit)
         vin_drop_gain = args.vin_drop_gain if args.vin_drop_gain > 0 else None
-        model, data, bam_ctrl, _bam_names = load_mujoco_with_bam(
-            xml_path, bam_model, 0.005, vin_drop_gain, BAM_VIN_MIN)
+        model, data, bam_ctrl, _bam_names = load_mujoco_with_bam(xml_path, bam_model, 0.005, vin_drop_gain, BAM_VIN_MIN)
     else:
         model = mujoco.MjModel.from_xml_path(xml_path)
         model.opt.timestep = 0.005
@@ -1068,7 +1143,8 @@ def main():
 
     # 初始化策略
     policy = PolicyInference(
-        model, data,
+        model,
+        data,
         bam_ctrl=bam_ctrl,
         walking_onnx_path=args.walking,
         action_scale=args.action_scale,
@@ -1129,7 +1205,7 @@ def main():
     for i, qpos_idx in enumerate(policy.joint_qpos_indices):
         data.qpos[qpos_idx] = policy.default_pose[i]
     if bam_ctrl is not None:
-        bam_ctrl.reset(data.qpos)   # clears voltage-drop state, q_target = current qpos
+        bam_ctrl.reset(data.qpos)  # clears voltage-drop state, q_target = current qpos
     policy.set_position_targets(policy.default_pose)
     mujoco.mj_forward(model, data)
 
@@ -1172,10 +1248,7 @@ def main():
         print("slope 策略: 已加载  (按 Y 切换, 被动下滑)")
     _behavior_keys = {"kick_left": "K", "kick_right": "L", "roulade": "R"}
     for _name in policy.behavior_sessions:
-        print(
-            f"{_name} 策略: 已加载  (按 {_behavior_keys[_name]}, "
-            f"{policy.behavior_durations[_name]:.1f}s 后自动返回)"
-        )
+        print(f"{_name} 策略: 已加载  (按 {_behavior_keys[_name]}, {policy.behavior_durations[_name]:.1f}s 后自动返回)")
     print(f"当前活动策略: {policy.current_policy}")
     print("关闭 viewer 窗口以退出")
     print()

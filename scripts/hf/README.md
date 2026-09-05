@@ -67,9 +67,11 @@ job id 和 URL 在提交时打印. 从 Python:
 
 ```python
 from huggingface_hub import HfApi
+
 api = HfApi()
-api.list_jobs()                                  # 或 namespace="pollen-robotics"
-for l in api.fetch_job_logs(job_id="...", follow=True): print(l)
+api.list_jobs()  # 或 namespace="pollen-robotics"
+for l in api.fetch_job_logs(job_id="...", follow=True):
+    print(l)
 api.cancel_job(job_id="...")
 ```
 

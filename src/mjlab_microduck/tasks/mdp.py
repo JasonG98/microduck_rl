@@ -131,8 +131,8 @@ _DEFAULT_ASSET_CFG = SceneEntityCfg("robot")
 # 这些是初始化后冻结的共享 dataclass 配置).
 _TRUNK_BASE_ASSET_CFG = SceneEntityCfg("robot", body_names=("trunk_base",))
 _LEG_JOINTS_ASSET_CFG = SceneEntityCfg("robot", joint_names=(r".*(hip|knee|ankle).*",))
-_MOUTH_TIP_ASSET_CFG = SceneEntityCfg("robot", site_names=["mouth_tip"])
-_JAW_SOFT_ASSET_CFG = SceneEntityCfg("robot", body_names=["jaw_soft"], site_names=["mouth_tip"])
+_MOUTH_TIP_ASSET_CFG = SceneEntityCfg("robot", site_names=("mouth_tip",))
+_JAW_SOFT_ASSET_CFG = SceneEntityCfg("robot", body_names=("jaw_soft",), site_names=("mouth_tip",))
 _FEET_ASSET_CFG = SceneEntityCfg("robot", site_names=("left_foot", "right_foot"))
 
 # 匹配 4 个 neck/head 驱动关节的名称模式.用于 head_pose 跟踪 reward 和

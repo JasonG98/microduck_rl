@@ -471,9 +471,7 @@ def test_already_negative_penalties_use_positive_weights():
     # 这三项调用的函数已经返回负值
     # (height_l1_penalty, pose_l1_penalty, trunk_vertical_accel_penalty).
     for name in ("height_stand_l1", "pose_stand_l1", "gentle_rise"):
-        assert cfg.rewards[name].weight > 0, (
-            f"{name} 调用的函数已经返回负值: 负权重会变成奖励"
-        )
+        assert cfg.rewards[name].weight > 0, f"{name} 调用的函数已经返回负值: 负权重会变成奖励"
     # 而这些项返回正量级 -> 负权重.
     for name in ("joint_torques_l2", "joint_torque_rate_l2", "action_rate_l2"):
         assert cfg.rewards[name].weight < 0, f"{name} 期望负权重"

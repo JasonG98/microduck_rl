@@ -29,13 +29,9 @@ ENABLE_HEAD_COM_RANDOMIZATION = True  # 随机化头部组件各 body 的 CoM
 ENABLE_KP_RANDOMIZATION = False  # 曾为 True
 ENABLE_KD_RANDOMIZATION = False  # 曾为 True
 ENABLE_MASS_INERTIA_RANDOMIZATION = True  # 行走稳定后可启用
-ENABLE_JOINT_FRICTION_RANDOMIZATION = (
-    True  # 通过 FrictionDRBamActuator.friction_scale 按环境缩放 BAM 的摩擦预算
-)
+ENABLE_JOINT_FRICTION_RANDOMIZATION = True  # 通过 FrictionDRBamActuator.friction_scale 按环境缩放 BAM 的摩擦预算
 ENABLE_JOINT_DAMPING_RANDOMIZATION = False
-ENABLE_ARMATURE_RANDOMIZATION = (
-    True  # 反射转子惯量 (microban 风格). 对 BAM 有效 (armature 被设置, 未被清零).
-)
+ENABLE_ARMATURE_RANDOMIZATION = True  # 反射转子惯量 (microban 风格). 对 BAM 有效 (armature 被设置, 未被清零).
 ENABLE_VELOCITY_PUSHES = True  # 基于速度的推力, 用于鲁棒性训练
 ENABLE_IMU_ORIENTATION_RANDOMIZATION = True  # 模拟安装误差
 ENABLE_ENCODER_BIAS = True  # 每环境关节编码器标定偏移 (actor obs 看到 joint_pos + bias)
@@ -213,7 +209,7 @@ def make_microduck_velocity_env_cfg(
         r".*ankle.*": 0.25,  # 曾为 0.15
     }
 
-    site_names = ["left_foot", "right_foot"]
+    site_names = ("left_foot", "right_foot")
 
     # 足部接触传感器 - 左, 右顺序
     feet_ground_cfg = ContactSensorCfg(

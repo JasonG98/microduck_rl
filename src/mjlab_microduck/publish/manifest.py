@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -60,7 +60,7 @@ class Provenance:
 
 
 def _now_utc() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def git_provenance(repo_root: Path | None = None) -> dict[str, Any]:
@@ -69,9 +69,7 @@ def git_provenance(repo_root: Path | None = None) -> dict[str, Any]:
 
     def git(*args: str) -> str | None:
         try:
-            out = subprocess.run(
-                ["git", "-C", root, *args], capture_output=True, text=True, check=True, timeout=10
-            )
+            out = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True, check=True, timeout=10)
         except (OSError, subprocess.SubprocessError):
             return None
         return out.stdout.strip()
@@ -102,22 +100,18 @@ def build_manifest(
 ) -> dict[str, Any]:
     """守护进程能无意外加载的单策略 manifest.
 
-从这里只能发布常量命令一族 -- 技能网络的输入是固定的 twist. phase 和姿态 flag 的编码是官方
-策略集自己的领地, 社区策略不属于这种形态.
-"""
+    从这里只能发布常量命令一族 -- 技能网络的输入是固定的 twist. phase 和姿态 flag 的编码是官方
+    策略集自己的领地, 社区策略不属于这种形态.
+    """
     if kind not in KINDS:
         raise ManifestError(f"kind 必须是 {KINDS} 之一, 而不是 {kind!r}")
     if not name or "/" in name or name != name.strip():
         raise ManifestError(f"name 必须是一个客户端可请求的裸词, 而不是 {name!r}")
     if kind == "episodic":
         if duration_s is None or duration_s <= 0:
-            raise ManifestError(
-                "episodic 策略会自我终止: 用 duration_s > 0 说明它运行多久"
-            )
+            raise ManifestError("episodic 策略会自我终止: 用 duration_s > 0 说明它运行多久")
         if unwind_s:
-            raise ManifestError(
-                "episodic 策略在 duration_s 到时就已回来; unwind_s 是给 perpetual 用的"
-            )
+            raise ManifestError("episodic 策略在 duration_s 到时就已回来; unwind_s 是给 perpetual 用的")
     else:
         # 有两种 perpetual: 一种是步态, 放在某个槽位里 (`policy load walk <repo>`) 在这里
         # 不需要额外字段; 另一种是保持某个姿态 (如 flamingo), 属主以 `policy add --hold`
@@ -182,9 +176,9 @@ def build_manifest(
 def validate_manifest(manifest: dict[str, Any]) -> None:
     """拒绝守护进程会拒绝的内容, 再加它会加载并运行出错的那类错误.
 
-两种形态和任意 schema 版本都接受, 因为字段缺失不算证据 -- 仓库没有义务携带任何字段.
-只有写出来且写错的说法才会失败.
-"""
+    两种形态和任意 schema 版本都接受, 因为字段缺失不算证据 -- 仓库没有义务携带任何字段.
+    只有写出来且写错的说法才会失败.
+    """
     if "policies" in manifest:
         for entry in manifest["policies"]:
             if "file" not in entry:
@@ -276,9 +270,9 @@ def check_onnx(path: Path) -> OnnxShape:
 def smoke_run_onnx(path: Path, steps: int = 50, seed: int = 0) -> None:
     """用合理输入运行网络, 拒绝 NaN/inf 或饱和的输出.
 
-不是物理排练 -- 那由 `scripts/infer_policy.py` 承担 -- 但能在任何东西上传之前抓住
-导出损坏 (未内嵌的 normalizer 在原始观测上产生 NaN, 或图无法执行).
-"""
+    不是物理排练 -- 那由 `scripts/infer_policy.py` 承担 -- 但能在任何东西上传之前抓住
+    导出损坏 (未内嵌的 normalizer 在原始观测上产生 NaN, 或图无法执行).
+    """
     import numpy as np
     import onnxruntime as ort
 
@@ -308,9 +302,9 @@ def smoke_run_onnx(path: Path, steps: int = 50, seed: int = 0) -> None:
 def install_commands(manifest: dict[str, Any], repo_id: str) -> str:
     """把这个策略装上机器人的 `robotctl` 命令 -- 每种形态一个用法.
 
-Episodic: 一个技能, 时长取自 manifest. 带 `unwind_s` 的 perpetual: 属主以 `--hold` 技能方式
-运行的保持姿态. 不带各自的 perpetual: 步态, 载入槽位.
-"""
+    Episodic: 一个技能, 时长取自 manifest. 带 `unwind_s` 的 perpetual: 属主以 `--hold` 技能方式
+    运行的保持姿态. 不带各自的 perpetual: 步态, 载入槽位.
+    """
     name = manifest["name"]
     if manifest["kind"] == "episodic":
         return f"sudo robotctl policy add {name} {repo_id}\nrobotctl robot do {name}"

@@ -1,4 +1,4 @@
-"""`uv run publish` -- 以 microduck 守护进程能够加载的形式, 把策略放到 Hub 上.
+r"""`uv run publish` -- 以 microduck 守护进程能够加载的形式, 把策略放到 Hub 上.
 
     # 从 wandb 运行导出 (内嵌 normalizer, -- 从 checkpoint 出发唯一的可靠路径)
     uv run publish --task Mjlab-PoliteBow-Flat-MicroDuck --wandb-run-path ent/proj/run --checkpoint 3000 \\
@@ -112,6 +112,7 @@ def _resolve_weights(cfg: PublishConfig, workdir: Path) -> tuple[Path, dict]:
 
     # 只有这条路径才做重型导入: ONNX 路径必须在没有 GPU 或 mjlab 注册表的情况下也能工作.
     import mjlab.tasks  # noqa: F401  (填充注册表)
+
     from mjlab_microduck.export import ExportConfig, run_export
 
     out = workdir / m.POLICY_FILE

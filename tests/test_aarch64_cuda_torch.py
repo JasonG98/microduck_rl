@@ -79,8 +79,7 @@ def test_lockfile_routes_aarch64_torch_to_cuda_wheels():
     torch_pkgs = _packages("torch")
     aarch64 = _aarch64_entry(torch_pkgs)
     assert _registry(aarch64).startswith(_CUDA_INDEX), (
-        f"aarch64 上的 torch 来自 {_registry(aarch64)!r} —— 是 CPU wheel."
-        "请检查 [tool.uv.sources] 后重新运行 `uv lock`."
+        f"aarch64 上的 torch 来自 {_registry(aarch64)!r} —— 是 CPU wheel.请检查 [tool.uv.sources] 后重新运行 `uv lock`."
     )
     wheels = " ".join(w["url"] for w in aarch64["wheels"])
     assert "aarch64" in wheels, "aarch64 torch 条目里没有 aarch64 wheel"

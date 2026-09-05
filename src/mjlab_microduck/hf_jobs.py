@@ -183,8 +183,7 @@ def _pick_namespace(api: HfApi, preset: str | None) -> str:
     if preset is not None:
         if preset not in (user, *orgs):
             raise RuntimeError(
-                f"--namespace {preset!r} 既不是你的账号 ({user}) "
-                f"也不是你的组织之一 ({', '.join(orgs) or '无'})."
+                f"--namespace {preset!r} 既不是你的账号 ({user}) 也不是你的组织之一 ({', '.join(orgs) or '无'})."
             )
         return preset
 
@@ -445,10 +444,7 @@ def submit(argv: list[str]) -> int:
             if getattr(job, "url", None):
                 print(f"[job] url: {job.url}")
             if args.detach:
-                print(
-                    "[job] --detach: 不监督启动 — 查看上方 URL; "
-                    "瞬态 'Volume mount failed' 错误需要手动重新提交."
-                )
+                print("[job] --detach: 不监督启动 — 查看上方 URL; 瞬态 'Volume mount failed' 错误需要手动重新提交.")
                 return 0
             stage, message = _await_scheduling(api, job.id, namespace)
             if stage == "ERROR" and "mount" in (message or "").lower():

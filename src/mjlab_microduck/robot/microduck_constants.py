@@ -40,7 +40,9 @@ assert MICRODUCK_BALL_XML.exists(), f"XML not found: {MICRODUCK_BALL_XML}"
 assert MICRODUCK_GROUNDCONTACT_ROLLERS_XML.exists(), f"XML not found: {MICRODUCK_GROUNDCONTACT_ROLLERS_XML}"
 assert MICRODUCK_GROUNDCONTACT_BACKLASH_XML.exists(), f"XML not found: {MICRODUCK_GROUNDCONTACT_BACKLASH_XML}"
 assert MICRODUCK_WALK_BACKLASH_XML.exists(), f"XML not found: {MICRODUCK_WALK_BACKLASH_XML}"
-assert MICRODUCK_GROUNDCONTACT_ROLLERS_BACKLASH_XML.exists(), f"XML not found: {MICRODUCK_GROUNDCONTACT_ROLLERS_BACKLASH_XML}"
+assert MICRODUCK_GROUNDCONTACT_ROLLERS_BACKLASH_XML.exists(), (
+    f"XML not found: {MICRODUCK_GROUNDCONTACT_ROLLERS_BACKLASH_XML}"
+)
 
 
 def get_walk_spec() -> mujoco.MjSpec:
@@ -116,7 +118,7 @@ HOME_FRAME = EntityCfg.InitialStateCfg(
 )
 
 FULL_COLLISION = CollisionCfg(
-    geom_names_expr=[".*_collision"],
+    geom_names_expr=(".*_collision",),
     condim={r"^(left|right)_foot_collision$": 3, ".*_collision": 1},
     priority={r"^(left|right)_foot_collision$": 1},
     friction={r"^(left|right)_foot_collision$": (1.0,)},

@@ -73,13 +73,11 @@ def test_train_on_path_is_a_mjlab_trainer():
     绝不能是机器上随便安装的别的什么."""
     exe = shutil.which("train")
     assert exe is not None, (
-        "PATH 上没有 `train` —— venv script 被卸载且未重建; "
-        "运行 `uv sync --reinstall-package mjlab-microduck`."
+        "PATH 上没有 `train` —— venv script 被卸载且未重建; 运行 `uv sync --reinstall-package mjlab-microduck`."
     )
     head = Path(exe).read_bytes()[:8192]
     assert b"mjlab" in head, (
-        f"`train` 解析到 {exe}, 它不是 mjlab trainer.bin/train 被卸载了,"
-        " 这是 PATH 上另一个无关的二进制."
+        f"`train` 解析到 {exe}, 它不是 mjlab trainer.bin/train 被卸载了, 这是 PATH 上另一个无关的二进制."
     )
 
 

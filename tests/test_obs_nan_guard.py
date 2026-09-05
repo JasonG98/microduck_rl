@@ -126,6 +126,4 @@ def test_standup_env_is_also_guarded():
     terms = cfg.observations["critic"].terms
     for name in ("foot_contact_forces", "foot_air_time"):
         assert terms[name].func.__name__.endswith("_safe"), f"standup critic/{name} 丢了 NaN guard"
-    assert cfg.terminations["nan_state"].params.get("sensor_names"), (
-        "standup nan_state 不再监视 contact forces"
-    )
+    assert cfg.terminations["nan_state"].params.get("sensor_names"), "standup nan_state 不再监视 contact forces"

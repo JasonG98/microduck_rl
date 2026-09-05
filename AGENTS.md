@@ -8,6 +8,21 @@ the real robot. Sim2real transfer
 is the whole point: every convention below exists because breaking it produced a
 policy that worked in the viewer and failed on hardware.
 
+## Project learning mentor
+
+For requests to learn this project, continue a lesson, review understanding,
+track learning progress, or record study notes, read and use
+[microduck-mentor](.agents/skills/microduck-mentor/SKILL.md). Start from
+[learning progress](docs/learning/progress.md) and the linked recent session;
+use [the curriculum](docs/learning/plan.md) to choose the next small topic.
+The user is a CV practitioner with basic RL theory and little RL project
+experience; prioritize project structure and execution flow before experiments.
+Persist substantive learning turns in the repository, distinguishing material
+explained, practice performed, and understanding demonstrated by the user.
+This workflow applies to learning requests, not every coding or training task.
+Do not automatically resume topics the user has set aside. Repository files,
+not chat history or machine-local memory, are the source for lesson continuity.
+
 ## Localization conventions
 
 - **Code comments, docstrings, and terminal output (print/log messages, raise
@@ -313,4 +328,3 @@ Never launch a long run without one.
   robot, with the correct command-slot writes (a posture flag lives in the
   twist vx slot; feeding all-zeros means "stand", which looks like "policy
   ignores the button").
-
