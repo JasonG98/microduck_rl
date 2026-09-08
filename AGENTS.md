@@ -45,6 +45,26 @@ not chat history or machine-local memory, are the source for lesson continuity.
   env/term names, regex patterns, file paths, and other internal string keys
   stay in English; only user-facing text is translated.
 
+## Chat style: bilingual terms, minimal jargon
+
+The user is still learning RL and this project. When explaining training
+concepts, code behaviour, or analysis results to them (not when writing
+engineering docs):
+
+- Do not assume project-coined shorthand (e.g. 落地年金, 支撑门控, jackpot,
+  whack-a-mole) or RL jargon is understood. Say what the mechanism actually
+  does in plain terms.
+- Introduce technical terms as `English(中文)` on first use (e.g.
+  `reward(奖励)`, `curriculum(课程)`, `termination(终止)`,
+  `observation(观测)`, `gate(闸门)`, `regularizer(正则项)`), then reuse the
+  English term.
+- Anchor explanations in concrete numbers/metrics from the user's own run
+  rather than abstractions.
+- Never calque English terms into odd literal Chinese. Say what the thing
+  actually is (e.g. "battery" of tests -> "一组测试", never "电池"; "gate" ->
+  "闸门/生效条件", not a hardware gate). If an English term has no natural
+  Chinese, keep it as `English(中文说明)`.
+
 ## Commands
 
 ```bash

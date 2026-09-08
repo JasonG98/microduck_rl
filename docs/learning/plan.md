@@ -22,6 +22,7 @@
 - 先讲模块职责, 再沿真实调用链阅读, 最后做一个小验证. 不逐行通读全部 `mdp.py`.
 - 每单元都有用户亲手完成的小操作; 导师先示范必要步骤, 再逐渐减少提示. 用户需要代做时记录执行者, 不计为用户掌握.
 - 每次围绕一个主问题. 首次建议 30-45 分钟, 用户可缩短, 加深, 跳转或暂停.
+- 复习/抽查用题库式选择测验 (面试拷问): 题面进 [quiz/questions](quiz/questions), 作答与判定进 [quiz/records](quiz/records), 识别级 (选择) 与复述/操作级证据分开记录; 约定见 [quiz/README.md](quiz/README.md).
 - 先补工程结构, PPO/GAE 已讲内容按需回顾. 不重复用长训练证明命令能运行.
 - 本文只维护课程范围; 当前状态和证据统一放在 [progress.md](progress.md), 不重复打勾.
 - 旧笔记保留在 [Session 1](session-01.md) 和 [补充](session-01-supplement.md). 历史说明不替代当前源码与 [AGENTS.md](../../AGENTS.md).
