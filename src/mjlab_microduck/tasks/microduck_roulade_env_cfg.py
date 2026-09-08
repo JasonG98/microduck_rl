@@ -25,6 +25,14 @@ roulade 永不离开地面), 落地年金需要过头顶接触锁, 付费进度�
 DR / obs / 正则项镜像 standup 环境 (velocity sim2real 一致), 运动阻断项
 (body_ang_vel, |a_z|, arrival damping) 在发现期间保持近零, 由课程后引入 —
 翻滚是大角速度, 大冲击事件; 对尝试征税阻止发现 (standup 上证明两次).
+
+后续: 2026-09-07 (wandb run cx8x7hnr / model_9999): 翻滚与落地已固化
+(站立生成完成率 ~95%), 但站定后头颈停在极端姿态 (neck_pitch -70°,
+head_pitch -95°, head_yaw +128° vs HOME — 落地奖励只量躯干高度/直立/腿,
+头颈是无主自由度). 新增 roulade_home_pose_l1: 翻完 (completion gate + head
+latch) 且站直 (高度窗 + 直立窗) 后, 对全身 14 关节偏离 HOME 收 L1 税 —
+"结束姿态像翻滚前 (HOME)" 成为站定后的净负偏差. 三层闸门确保翻滚抱头与
+起身过渡期豁免 (仓库 "对必要过程收税会反噬技能" 的教训).
 """
 
 import math
@@ -103,6 +111,9 @@ RISE_GATE_HI = math.radians(260.0)
 
 _LEG_JOINTS = [0, 1, 2, 3, 4, 9, 10, 11, 12, 13]
 _NECK_JOINTS = [5, 6, 7, 8]
+# 全部 14 个 servo (plain walk 模型无交错 passive 关节; 顺序即 servo 视图
+# 索引, 由 mdp 的 _servo_joint_* 辅助函数解析). 用于 "站定后全身回 HOME".
+_BODY_JOINTS = sorted(set(_LEG_JOINTS) | set(_NECK_JOINTS))
 
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.mdp import dr
@@ -311,6 +322,27 @@ def make_microduck_roulade_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
             "target_height": STAND_Z,
             "gate_lo": LANDING_GATE_LO,
             "gate_hi": LANDING_GATE_HI,
+        },
+    )
+
+    # 全身回 HOME 税 (2026-09-07, run cx8x7hnr 诊断): 翻完且站直后, 每步
+    # 按 14 关节偏离 HOME 的均值 L1 收税 — 修 "站定后头颈停在极端姿态"
+    # (neck -70°/head_pitch -95°/head_yaw +128° vs HOME). 自否定函数 →
+    # POSITIVE weight (penalty sign convention). 三层闸门 (completion gate +
+    # head latch + 高度窗 + 直立窗) 保证翻滚抱头与起身过渡期零税.
+    # 权重 1.0 → 2.5 (run yt8i7lif 实测): 1.0 在 iter ~10750 后残留约
+    # 10° 的 pitch 链偏差 (L1 收益 ≈ 回正扰动成本处停止), 提高权重继续压.
+    cfg.rewards["roulade_home_pose_l1"] = RewardTermCfg(
+        func=microduck_mdp.roulade_home_pose_l1,
+        weight=2.5,
+        params={
+            "joint_indices": _BODY_JOINTS,
+            "gate_lo": LANDING_GATE_LO,
+            "gate_hi": LANDING_GATE_HI,
+            "z_low": 0.095,
+            "z_high": 0.112,
+            "tilt_full_deg": 20.0,
+            "tilt_zero_deg": 45.0,
         },
     )
 

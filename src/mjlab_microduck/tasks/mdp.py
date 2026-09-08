@@ -6967,3 +6967,67 @@ def roulade_lateral_velocity_penalty(
     """Body-frame lateral (y) linear velocity² — 保持滚翻走直线."""
     asset: Entity = env.scene[asset_cfg.name]
     return torch.nan_to_num(asset.data.root_link_lin_vel_b[:, 1].pow(2), nan=0.0)
+
+
+def roulade_home_pose_l1(
+    env: ManagerBasedRlEnv,
+    joint_indices: list,
+    gate_lo: float = math.radians(260.0),
+    gate_hi: float = math.radians(330.0),
+    require_head: bool = True,
+    z_low: float = 0.095,
+    z_high: float = 0.112,
+    tilt_full_deg: float = 20.0,
+    tilt_zero_deg: float = 45.0,
+    target_overrides: dict | None = None,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """SELF-NEGATING 全身回 HOME 姿态税 — 仅翻完并站直后生效.
+
+    返回 -mean(|servo_pos - HOME|) x completion_gate x 站立窗, 使用
+    POSITIVE weight (penalty sign convention, 同 roulade_stand_tax).
+
+    动机 (2026-09 诊断): 策略能完成翻滚并站定, 但头颈 4 关节停在一个
+    极端姿态 (neck_pitch -70°, head_pitch -95°, head_yaw +128° vs HOME),
+    100% 复现, 零抖动 — 落地奖励只量高度/直立/腿关节, 头颈是无主自由度,
+    策略把翻滚出口的头姿当配重冻结. 此税把 "结束姿态像翻滚前 (HOME)" 变成
+    站定后的净负偏差: 头不回家就持续扣钱.
+
+    三层闸门避免重复 "对必要过程收税" 的仓库教训 (standup/roulade 各踩过):
+      * completion gate (260-330 deg + head latch): 翻滚中的抱头姿势豁免
+        (latch 需要头顶朝下, 头必须缩着).
+      * 高度窗 z_low..z_high + 直立窗 (tilt_full..tilt_zero): 起身过程
+        (腿蜷着、头在摆、躯干大角度) 全部豁免, 只在接近站定后才开税.
+    误差取 L1 而非高斯: 从远端 (头偏 2 rad) 到近端梯度均匀, 没有 sigma
+    盲区, 也不需要单独的宽/窄两层; 站定后头部静止, L1 即直流偏差税.
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+    _update_roulade_accum(env, asset)
+
+    # 关节偏差 vs HOME (default_joint_pos = 翻滚前站姿, 见 reset 事件).
+    target = _servo_default_joint_pos(env, asset).clone()
+    if target_overrides:
+        for idx, val in target_overrides.items():
+            target[:, idx] = val
+    pos = _servo_joint_pos(env, asset)[:, joint_indices]
+    target = target[:, joint_indices]
+    err = (pos - target).abs().mean(dim=1)
+
+    # 站立窗: 高度 smoothstep (同 body_ang_vel_at_height).
+    z = torch.nan_to_num(asset.data.root_link_pos_w[:, 2] - env.scene.terrain.env_origins[:, 2], nan=0.0)
+    t = torch.clamp((z - z_low) / max(z_high - z_low, 1e-6), 0.0, 1.0)
+    height_gate = t * t * (3.0 - 2.0 * t)
+
+    # 直立窗: 倾角 <= tilt_full 满开, >= tilt_zero 关闭, 之间 smoothstep.
+    quat = asset.data.root_link_quat_w
+    cos_tilt = 1.0 - 2.0 * (quat[:, 1].pow(2) + quat[:, 2].pow(2))
+    tilt_deg = torch.rad2deg(torch.acos(cos_tilt.clamp(-1.0, 1.0)))
+    s = torch.clamp(
+        (tilt_zero_deg - tilt_deg) / max(tilt_zero_deg - tilt_full_deg, 1e-6),
+        0.0,
+        1.0,
+    )
+    tilt_gate = s * s * (3.0 - 2.0 * s)
+
+    gate = _roulade_completion_gate(env, gate_lo, gate_hi, require_head=require_head)
+    return -err * height_gate * tilt_gate * gate
