@@ -238,9 +238,10 @@ register_mjlab_task(
 # Backlash 变体 — 每个 servo ±1° 串联齿轮间隙 + 经由 backlash 的编码器
 # 反馈与关节观测 (见 tasks/backlash.py). 每个任务族保留其基础任务的碰撞
 # 模型: Velocity → robot_walk_backlash.xml,
-# VelStand/StandUp → robot_groundcontact_backlash.xml. obs/action 维度
-# 与基础任务保持一致.
+# VelStand → robot_allcollisions_backlash.xml, StandUp → robot_groundcontact_backlash.xml.
+# obs/action 维度与基础任务保持一致.
 from mjlab_microduck.robot.microduck_constants import (
+    MICRODUCK_ALLCOLLISIONS_BACKLASH_ROBOT_CFG,
     MICRODUCK_BACKLASH_ROBOT_CFG,
     MICRODUCK_ROLLERS_BACKLASH_ROBOT_CFG,
     MICRODUCK_WALK_BACKLASH_ROBOT_CFG,
@@ -253,106 +254,23 @@ from mjlab_microduck.robot.microduck_constants import (
 _BL_GROUNDCONTACT = MICRODUCK_BACKLASH_ROBOT_CFG
 _BL_WALK = MICRODUCK_WALK_BACKLASH_ROBOT_CFG
 _BL_ROLLERS = MICRODUCK_ROLLERS_BACKLASH_ROBOT_CFG
+_BL_ALLCOLLISIONS = MICRODUCK_ALLCOLLISIONS_BACKLASH_ROBOT_CFG
 _BACKLASH_TASKS = (
     ("Mjlab-Velocity-Flat-Backlash-MicroDuck", make_microduck_velocity_env_cfg, {}, MicroduckRlCfg, _BL_WALK),
-    (
-        "Mjlab-Velocity-Rough-Backlash-MicroDuck",
-        make_microduck_velocity_env_cfg,
-        {"rough": True},
-        MicroduckRlCfg,
-        _BL_WALK,
-    ),
-    (
-        "Mjlab-VelStand-Flat-Backlash-MicroDuck",
-        make_microduck_velstand_env_cfg,
-        {},
-        MicroduckVelStandRlCfg,
-        _BL_GROUNDCONTACT,
-    ),
-    (
-        "Mjlab-VelStand-Rough-Backlash-MicroDuck",
-        make_microduck_velstand_env_cfg,
-        {"rough": True},
-        MicroduckVelStandRlCfg,
-        _BL_GROUNDCONTACT,
-    ),
-    (
-        "Mjlab-StandUp-Flat-Backlash-MicroDuck",
-        make_microduck_standup_env_cfg,
-        {},
-        MicroduckStandUpRlCfg,
-        _BL_GROUNDCONTACT,
-    ),
-    (
-        "Mjlab-StandUp-Rough-Backlash-MicroDuck",
-        make_microduck_standup_env_cfg,
-        {"rough": True},
-        MicroduckStandUpRlCfg,
-        _BL_GROUNDCONTACT,
-    ),
-    (
-        "Mjlab-SitStand-Flat-Backlash-MicroDuck",
-        make_microduck_sitstand_env_cfg,
-        {},
-        MicroduckSitStandRlCfg,
-        _BL_GROUNDCONTACT,
-    ),
-    (
-        "Mjlab-SitStand-Rough-Backlash-MicroDuck",
-        make_microduck_sitstand_env_cfg,
-        {"rough": True},
-        MicroduckSitStandRlCfg,
-        _BL_GROUNDCONTACT,
-    ),
-    (
-        "Mjlab-GroundPick-Flat-Backlash-MicroDuck",
-        make_microduck_ground_pick_env_cfg,
-        {},
-        MicroduckGroundPickRlCfg,
-        _BL_GROUNDCONTACT,
-    ),
-    (
-        "Mjlab-GroundPick-Rough-Backlash-MicroDuck",
-        make_microduck_ground_pick_env_cfg,
-        {"rough": True},
-        MicroduckGroundPickRlCfg,
-        _BL_GROUNDCONTACT,
-    ),
-    (
-        "Mjlab-BallKick-Flat-Backlash-MicroDuck",
-        make_microduck_ball_kick_env_cfg,
-        {},
-        MicroduckBallKickRlCfg,
-        _BL_GROUNDCONTACT,
-    ),
-    (
-        "Mjlab-Velocity-Flat-Backlash-MicroDuck-Rollers",
-        make_microduck_velocity_rollers_env_cfg,
-        {},
-        MicroduckRollersRlCfg,
-        _BL_ROLLERS,
-    ),
-    (
-        "Mjlab-Velocity-Swizzle-Backlash-MicroDuck",
-        make_microduck_velocity_swizzle_env_cfg,
-        {},
-        MicroduckSwizzleRlCfg,
-        _BL_ROLLERS,
-    ),
-    (
-        "Mjlab-RollerCrouch-Flat-Backlash-MicroDuck",
-        make_microduck_roller_crouch_env_cfg,
-        {},
-        MicroduckRollerCrouchRlCfg,
-        _BL_ROLLERS,
-    ),
-    (
-        "Mjlab-RollerSlope-Flat-Backlash-MicroDuck",
-        make_microduck_roller_slope_env_cfg,
-        {},
-        MicroduckRollerSlopeRlCfg,
-        _BL_ROLLERS,
-    ),
+    ("Mjlab-Velocity-Rough-Backlash-MicroDuck", make_microduck_velocity_env_cfg, {"rough": True}, MicroduckRlCfg, _BL_WALK),
+    ("Mjlab-VelStand-Flat-Backlash-MicroDuck", make_microduck_velstand_env_cfg, {}, MicroduckVelStandRlCfg, _BL_ALLCOLLISIONS),
+    ("Mjlab-VelStand-Rough-Backlash-MicroDuck", make_microduck_velstand_env_cfg, {"rough": True}, MicroduckVelStandRlCfg, _BL_ALLCOLLISIONS),
+    ("Mjlab-StandUp-Flat-Backlash-MicroDuck", make_microduck_standup_env_cfg, {}, MicroduckStandUpRlCfg, _BL_GROUNDCONTACT),
+    ("Mjlab-StandUp-Rough-Backlash-MicroDuck", make_microduck_standup_env_cfg, {"rough": True}, MicroduckStandUpRlCfg, _BL_GROUNDCONTACT),
+    ("Mjlab-SitStand-Flat-Backlash-MicroDuck", make_microduck_sitstand_env_cfg, {}, MicroduckSitStandRlCfg, _BL_GROUNDCONTACT),
+    ("Mjlab-SitStand-Rough-Backlash-MicroDuck", make_microduck_sitstand_env_cfg, {"rough": True}, MicroduckSitStandRlCfg, _BL_GROUNDCONTACT),
+    ("Mjlab-GroundPick-Flat-Backlash-MicroDuck", make_microduck_ground_pick_env_cfg, {}, MicroduckGroundPickRlCfg, _BL_GROUNDCONTACT),
+    ("Mjlab-GroundPick-Rough-Backlash-MicroDuck", make_microduck_ground_pick_env_cfg, {"rough": True}, MicroduckGroundPickRlCfg, _BL_GROUNDCONTACT),
+    ("Mjlab-BallKick-Flat-Backlash-MicroDuck", make_microduck_ball_kick_env_cfg, {}, MicroduckBallKickRlCfg, _BL_GROUNDCONTACT),
+    ("Mjlab-Velocity-Flat-Backlash-MicroDuck-Rollers", make_microduck_velocity_rollers_env_cfg, {}, MicroduckRollersRlCfg, _BL_ROLLERS),
+    ("Mjlab-Velocity-Swizzle-Backlash-MicroDuck", make_microduck_velocity_swizzle_env_cfg, {}, MicroduckSwizzleRlCfg, _BL_ROLLERS),
+    ("Mjlab-RollerCrouch-Flat-Backlash-MicroDuck", make_microduck_roller_crouch_env_cfg, {}, MicroduckRollerCrouchRlCfg, _BL_ROLLERS),
+    ("Mjlab-RollerSlope-Flat-Backlash-MicroDuck", make_microduck_roller_slope_env_cfg, {}, MicroduckRollerSlopeRlCfg, _BL_ROLLERS),
 )
 for _task_id, _make_cfg, _kw, _rl_cfg, _robot_cfg in _BACKLASH_TASKS:
     register_mjlab_task(

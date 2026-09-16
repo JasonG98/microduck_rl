@@ -1,6 +1,7 @@
 """microduck 任务的 MDP 函数."""
 
 import math
+import os
 from dataclasses import dataclass as _dataclass
 from typing import TYPE_CHECKING
 
@@ -122,6 +123,38 @@ except Exception:
 
 print("[mdp] Patch 4 已激活: ONNX 导出过滤 passive_* 关节")
 
+# Patch 5: warm start. MjlabOnPolicyRunner.load restores env.common_step_counter
+# (and rsl_rl restores the iteration) from the checkpoint so a RESUMED run keeps
+# its curricula. A WARM START loads another task's weights into a new task —
+# there the restored counter (e.g. 90 000 from a 3750-iter walk) would jump
+# every step-based curriculum straight to its final stage (seen 2026-09-09:
+# fell_over disabled and all protection costs at full weight in iteration 1).
+# With MICRODUCK_WARM_START=1 the counters restart at 0 after loading (weights,
+# normalizers and optimizer are kept). Forwarded into HF Jobs by hf_jobs.py.
+WARM_START_ENV = "MICRODUCK_WARM_START"
+
+try:
+    from mjlab.rl.runner import MjlabOnPolicyRunner as _MjlabRunner  # noqa: E402
+
+    _orig_runner_load = _MjlabRunner.load
+
+    def _load_with_warm_start(self, path, *args, **kwargs):
+        infos = _orig_runner_load(self, path, *args, **kwargs)
+        if os.environ.get(WARM_START_ENV, "") not in ("", "0"):
+            restored = self.env.unwrapped.common_step_counter
+            self.env.unwrapped.common_step_counter = 0
+            self.current_learning_iteration = 0
+            print(
+                f"[mdp] Patch 5: WARM START from {path} — common_step_counter "
+                f"{restored} → 0, iteration → 0 (curricula restart; weights/normalizer/optimizer kept)"
+            )
+        return infos
+
+    _MjlabRunner.load = _load_with_warm_start
+    print("[mdp] Patch 5 active: MICRODUCK_WARM_START=1 restarts curricula after checkpoint load")
+except Exception as _e:  # pragma: no cover
+    print(f"[mdp] Patch 5 NOT applied ({_e!r})")
+
 if TYPE_CHECKING:
     from mjlab.viewer.debug_visualizer import DebugVisualizer
 
@@ -160,6 +193,18 @@ def _servo_joint_ids(env: "ManagerBasedRlEnv", asset: Entity) -> list:
         ids, _ = asset.find_joints(r"^(?!passive_).*")
         cache[key] = ids
     return ids
+
+
+def _env_origin_z(env: "ManagerBasedRlEnv", env_ids: torch.Tensor) -> torch.Tensor:
+    """Terrain height of each env's origin. Every spawn function that writes an
+    ABSOLUTE trunk z must add this: on rough terrain (slope pyramids put the
+    platform well above z=0) an absolute z of 0.05-0.09 m puts the robot inside
+    the terrain → contact explosion → returns/value/std blow up. This is what
+    killed the first rough+backlash velstand run (wy8gcaus, 2026-09-10): stable
+    until prone spawns switched on at iter 700, then value loss 0.6 → 42 and
+    entropy 5 → 33, in lockstep with prone_prob. Flat runs never noticed
+    (origin z = 0)."""
+    return env.scene.env_origins[env_ids.long(), 2]
 
 
 def _servo_joint_pos(env: "ManagerBasedRlEnv", asset: Entity) -> torch.Tensor:
@@ -675,6 +720,103 @@ def recovery_success(
     fired = env._recovery_armed & up
     env._recovery_armed &= ~fired
     return fired.float()
+
+
+# ── VelStand / protective fall: servo-protection costs ────────────────────────
+# What breaks an XL330 (plastic gear train, ~288:1): (1) a limb back-driven
+# fast by an impact — even torque-off, the rotor inertia reflected through
+# 288² makes the gears see the spike, so joint ACCELERATION at contact is the
+# damage proxy; (2) stall — a limb pinned under the body while the servo pushes
+# at max torque strips teeth / overheats; (3) the housing itself striking the
+# floor. All three costs below return >= 0 (mjlab-style) → NEGATIVE weight, and
+# are ~0 during clean walking, so they price only falls and bad recoveries.
+
+
+def servo_stall_penalty(
+    env: ManagerBasedRlEnv,
+    torque_thresh: float = 0.4,
+    vel_thresh: float = 0.5,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Number of servos pushing hard against something that does not move.
+
+    A servo is "stalled" when |actuator torque| > ``torque_thresh`` (N·m) AND
+    |joint velocity| < ``vel_thresh`` (rad/s). BAM's voltage-bounded torque
+    saturates at vin·kt/R ≈ 0.85–1.07 N·m over the trained vin range; a
+    quasi-static stand loads the knees at a few 1e-2 N·m, so 0.4 fires only
+    when the servo is genuinely fighting a pin/jam. Returns the per-step count
+    (>= 0) — weight it negatively.
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+    torque = torch.nan_to_num(asset.data.actuator_force, nan=0.0)
+    vel = torch.nan_to_num(_servo_joint_vel(env, asset), nan=0.0)
+    stalled = (torque.abs() > torque_thresh) & (vel.abs() < vel_thresh)
+    return stalled.float().sum(dim=1)
+
+
+def servo_acc_spike_penalty(
+    env: ManagerBasedRlEnv,
+    acc_thresh: float = 300.0,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """Sum over servos of ReLU(|joint accel| - acc_thresh), accel by finite
+    difference of joint velocity at the control rate.
+
+    Impact back-driving is what loads the gear train (reflected rotor inertia);
+    a CPU baseline of pushed falls peaks at 450–550 rad/s² on the servo joints
+    in EVERY strategy (hold / partial limp / torque-off), so the policy's lever
+    is how and where it lands. State lives on the env; the reset step is zeroed
+    so a new episode's first frame cannot bill the previous episode's velocity.
+    Returns >= 0 (rad/s² above threshold) — weight it negatively.
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+    vel = torch.nan_to_num(_servo_joint_vel(env, asset), nan=0.0)
+    prev = getattr(env, "_servo_acc_prev_vel", None)
+    if prev is None or prev.shape != vel.shape:
+        prev = vel.detach().clone()
+    acc = (vel - prev) / env.step_dt
+    if hasattr(env, "episode_length_buf"):
+        reset_mask = (env.episode_length_buf <= 1).unsqueeze(1)
+        acc = torch.where(reset_mask, torch.zeros_like(acc), acc)
+    env._servo_acc_prev_vel = vel.detach().clone()
+    return torch.clamp(acc.abs() - acc_thresh, min=0.0).sum(dim=1)
+
+
+def _fallen_scale(env: ManagerBasedRlEnv, asset: Entity, fallen_scale: float, gate_tilt_above_deg: float) -> torch.Tensor:
+    fallen = _fallen_mask(env, asset, 0.0, gate_tilt_above_deg).bool()
+    return torch.where(fallen, torch.full_like(fallen, fallen_scale, dtype=torch.float), torch.ones(fallen.shape, device=env.device))
+
+
+def action_rate_l2_fallen_scaled(
+    env: ManagerBasedRlEnv,
+    fallen_scale: float = 0.1,
+    gate_tilt_above_deg: float = 40.0,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """mjlab action_rate_l2, multiplied by ``fallen_scale`` while tilt > gate.
+
+    Protective-fall velstand run 1 (2026-09-09) lesson: warm-starting from the
+    deployed walk pins action_rate at its final weight (-1.0, the largest cost in
+    the stack, -1.5..-2/step) from step 0. Against a flat -0.5 fallen tax, any
+    get-up attempt then costs more than lying still — the attempt-tax freeze:
+    0 recoveries in 800 iters, fallen action rate 1/5 of upright. The walk needs
+    its full smoothness tax; the fallen robot needs to be allowed to try. Returns
+    >= 0 → negative weight, same as action_rate_l2.
+    """
+    asset: Entity = env.scene[asset_cfg.name]
+    base = torch.sum(torch.square(env.action_manager.action - env.action_manager.prev_action), dim=1)
+    return base * _fallen_scale(env, asset, fallen_scale, gate_tilt_above_deg)
+
+
+def joint_torque_rate_l2_fallen_scaled(
+    env: ManagerBasedRlEnv,
+    fallen_scale: float = 0.1,
+    gate_tilt_above_deg: float = 40.0,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+    """joint_torque_rate_l2 × ``fallen_scale`` while fallen (see action_rate_l2_fallen_scaled)."""
+    asset: Entity = env.scene[asset_cfg.name]
+    return joint_torque_rate_l2(env, asset_cfg) * _fallen_scale(env, asset, fallen_scale, gate_tilt_above_deg)
 
 
 def body_upright_linear(
@@ -4044,18 +4186,28 @@ def set_random_prone_orientation(
     env_ids: torch.Tensor,
     asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
     face_down_prob: float = 0.5,
+    side_prob: float = 0.0,
 ):
-    """随机将每个 env 初始化为面朝下 (腹) 或面朝上 (背), 带随机 yaw.
+    """随机将每个 env 初始化为倒地姿态, 带随机 yaw.
+
+    前 ``side_prob`` 比例的 env 侧躺 (±90° roll, 左右各 50/50);
+    其余按 ``face_down_prob`` 分为面朝下 / 面朝上.
 
     Face-down:  +90° pitch → quat = [s*cy, -s*sy,  s*cy,  s*sy]
     Face-up:    -90° pitch → quat = [s*cy,  s*sy, -s*cy,  s*sy]
+    On side:    ±90° roll  → quat = yaw ⊗ roll = [s*cy, ±s*cy, ±s*sy, s*sy]
+
+    侧躺生成于 2026-09 加入 (protective-fall velstand run 1): headless eval
+    显示 79% 的被推倒最终落在侧面, 20% 面朝上, 0% 面朝下 — 占主导的
+    倒地状态完全没有反向课程数据.
 
     Args:
         env: RL 环境.
         env_ids: 要 reset 的 env 索引 tensor.
         asset_cfg: 机器人 asset 的 scene entity 配置.
-        face_down_prob: 采样 face-down (vs face-up) 的概率.课程可从高初始值
-            (较易任务) 渐降到 0.5.
+        face_down_prob: 非侧躺 env 中 face-down (vs face-up) 的概率. 课程可从
+            高初始值 (较易任务) 渐降到 0.5.
+        side_prob: 侧躺 env 的比例.
     """
     if env_ids is None or len(env_ids) == 0:
         return
@@ -4067,11 +4219,16 @@ def set_random_prone_orientation(
     sy = torch.sin(yaw * 0.5)
     s = 2.0**-0.5  # sqrt(2)/2
 
-    face_down = torch.stack([s * cy, -s * sy, s * cy, s * sy], dim=1)
-    face_up = torch.stack([s * cy, s * sy, -s * cy, s * sy], dim=1)
+    face_down = torch.stack([ s * cy, -s * sy,  s * cy,  s * sy], dim=1)
+    face_up   = torch.stack([ s * cy,  s * sy, -s * cy,  s * sy], dim=1)
+    sign = torch.where(torch.rand(num, device=env.device) < 0.5, 1.0, -1.0)
+    on_side  = torch.stack([ s * cy, sign * s * cy, sign * s * sy, s * sy], dim=1)
 
+    u = torch.rand(num, device=env.device)
+    side_mask = u < side_prob
     mask = torch.rand(num, device=env.device) < face_down_prob  # True → face-down
     new_quat = torch.where(mask.unsqueeze(1), face_down, face_up)
+    new_quat = torch.where(side_mask.unsqueeze(1), on_side, new_quat)
 
     env.sim.data.qpos[env_ids, 3:7] = new_quat
     env.sim.data.qvel[env_ids, :6] = 0.0  # 清零速度
@@ -4217,7 +4374,7 @@ def set_random_ground_state(
     new_z = torch.where(is_sit, z_sit, new_z)
     new_z = torch.where(is_stand, z_stand, new_z)
 
-    env.sim.data.qpos[env_ids, 2] = new_z
+    env.sim.data.qpos[env_ids, 2]   = new_z + _env_origin_z(env, env_ids)
     env.sim.data.qpos[env_ids, 3:7] = new_quat
     env.sim.data.qvel[env_ids, :6] = 0.0
 
@@ -4322,10 +4479,31 @@ def set_random_crouch_state(
     # trunk 高度按深度缩放, 小幅上浮余量以干净落定.
     z = z_stand + lam * (z_deep - z_stand) + torch.rand(num, device=env.device) * 0.01
 
-    env.sim.data.qpos[env_ids, 2] = z
+    env.sim.data.qpos[env_ids, 2] = z + _env_origin_z(env, env_ids)
     env.sim.data.qpos[env_ids, 3:7] = quat
     env.sim.data.qpos[env_ids, 7:] = joints
     env.sim.data.qvel[env_ids, :] = 0.0
+
+
+def randomize_servo_joints_uniform(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor,
+    asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+    range_frac: float = 0.8,
+):
+    """Sample every servo joint uniformly over the central ``range_frac`` of its
+    limits for ``env_ids``; zero joint velocities. Uses the entity write API, so it
+    is correct on backlash/roller models where passive joints interleave."""
+    asset: Entity = env.scene[asset_cfg.name]
+    ids = torch.as_tensor(_servo_joint_ids(env, asset), device=env.device, dtype=torch.long)
+    lim = asset.data.joint_pos_limits[env_ids][:, ids]  # (n, S, 2)
+    lo, hi = lim[..., 0], lim[..., 1]
+    mid, half = 0.5 * (lo + hi), 0.5 * (hi - lo) * range_frac
+    sample = mid + (torch.rand(len(env_ids), len(ids), device=env.device) * 2.0 - 1.0) * half
+    pos = asset.data.joint_pos[env_ids].clone()
+    pos[:, ids] = sample
+    asset.write_joint_position_to_sim(pos, env_ids=env_ids)
+    asset.write_joint_velocity_to_sim(torch.zeros_like(pos), env_ids=env_ids)
 
 
 def maybe_set_random_prone_orientation(
@@ -4337,11 +4515,28 @@ def maybe_set_random_prone_orientation(
     prone_z_min: float = 0.20,
     prone_z_max: float = 0.25,
     crouch_prob: float = 0.0,
+    side_prob: float = 0.0,
+    joint_random_prob: float = 0.0,
+    joint_range_frac: float = 0.8,
+    joint_random_extra_z: float = 0.06,
 ):
     """以概率 `prone_prob` 将朝向 override 为 prone 的 reset 事件.
 
+    ``joint_random_extra_z``: 关节随机化 env 的额外生成净空. 随机折叠的腿
+    可比躯干低约 10 cm; 在崎岖地形上生成时会与台阶/斜面互相穿插 (实测
+    800-1200 N 冲击尖峰, 而 HOME 关节约 110 N). 额外的小幅下落代价约 70 N.
+
+    ``side_prob`` (prone 切片中侧躺的比例) 透传给 set_random_prone_orientation.
+
+    ``joint_random_prob``: prone 切片中 SERVO 关节在每个关节限位中央
+    ``joint_range_frac`` 区间内均匀重新采样的比例 (速度清零).
+    类摔倒生成 (2026-09-10, protective fall run 4): 真实摔倒后腿停在步态
+    所在位置 — hip roll 顶在限位, head yaw 偏 1.7 rad, 膝盖任意位置 — 而
+    策略在推倒后仅恢复 58-77% 的面朝上落地, 从 HOME 姿态面朝上生成则为
+    100%. 剩余比例保持 HOME 姿态 (daemon 的从初始姿态站立情形).
+
     以概率 `prone_prob` 将 (reset_base 已设的) 直立朝向替换为 prone 朝向;
-    否则保持直立.在被 override 的 env 中, `face_down_prob` 选择 face-down
+    否则保持直立. 在被 override 的 env 中, `face_down_prob` 选择 face-down
     (腹) vs face-up (背).
 
     同时将被 override env 的 z 提升到 [prone_z_min, prone_z_max] 以保证
@@ -4372,10 +4567,17 @@ def maybe_set_random_prone_orientation(
     selected = env_ids_t[u < prone_prob]
     crouch_selected = env_ids_t[(u >= prone_prob) & (u < prone_prob + crouch_prob)]
     if len(selected) > 0:
-        set_random_prone_orientation(env, selected, asset_cfg=asset_cfg, face_down_prob=face_down_prob)
+        set_random_prone_orientation(
+            env, selected, asset_cfg=asset_cfg, face_down_prob=face_down_prob, side_prob=side_prob
+        )
         # override z 使 prone body 落定时有头/颈间隙.
         z = torch.rand(len(selected), device=env.device) * (prone_z_max - prone_z_min) + prone_z_min
-        env.sim.data.qpos[selected, 2] = z
+        env.sim.data.qpos[selected, 2] = z + _env_origin_z(env, selected)
+        if joint_random_prob > 0.0:
+            jr = selected[torch.rand(len(selected), device=env.device) < joint_random_prob]
+            if len(jr) > 0:
+                randomize_servo_joints_uniform(env, jr, asset_cfg=asset_cfg, range_frac=joint_range_frac)
+                env.sim.data.qpos[jr, 2] += joint_random_extra_z
     if len(crouch_selected) > 0:
         set_random_crouch_state(env, crouch_selected, asset_cfg=asset_cfg)
 
@@ -6662,7 +6864,7 @@ def reset_roulade_state(
     z_mid = torch.rand(num, device=env.device) * (midroll_z_max - midroll_z_min) + midroll_z_min
     new_z = torch.where(is_mid, z_mid, z_stand)
 
-    env.sim.data.qpos[env_ids, 2] = new_z
+    env.sim.data.qpos[env_ids, 2] = new_z + _env_origin_z(env, env_ids)
     env.sim.data.qpos[env_ids, 3:7] = quat
     env.sim.data.qvel[env_ids, :6] = 0.0
 
