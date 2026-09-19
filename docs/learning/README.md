@@ -28,7 +28,9 @@ $microduck-mentor 今天先到这里, 记录本次内容和下次起点
 | `quiz/records/` | 每轮测验的作答与判定记录 (用户选择/对错/复测状态) |
 | [session-01.md](session-01.md) / [补充](session-01-supplement.md) | 保留的历史学习内容 |
 | `sessions/` | 新课程及学习管理记录; 正式课编号写在记录内 |
-| `diagrams/` | 随仓库迁移的图示, 不只放聊天临时目录 |
+| [U2.1 图解笔记](assets/u2-1/README.md) | 模型词汇收课速览、6 张真实模型标注图、12 秒视频与动图 |
+| `assets/` / `tools/` | 随仓库迁移的教学媒体与可复现生成器 |
+| `diagrams/` | 随仓库迁移的其他图示, 不只放聊天临时目录 |
 | [导师 skill](../../.agents/skills/microduck-mentor/SKILL.md) | 接续, 教学, 记录和建议流程 |
 
 ## 换电脑如何继续

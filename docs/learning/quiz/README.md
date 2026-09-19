@@ -25,6 +25,10 @@
 
 | 文件 | 内容 |
 |---|---|
+| [questions/u2-bank.md](questions/u2-bank.md) | U2.1--U2.3 综合复习题库, 6 题 (2026-09-14) |
+| [records/2026-09-14-u2-review-quiz.md](records/2026-09-14-u2-review-quiz.md) | U2 综合复习测验, 已出题待作答 |
+| [questions/u2-1-bank.md](questions/u2-1-bank.md) | U2.1 模型词汇题库, 首批5题与针对性复测2题 |
+| [records/2026-09-08-u2-1-quiz.md](records/2026-09-08-u2-1-quiz.md) | 2026-09-08 U2.1 首批4/5, 维度复测2/2, 错题销项 (识别级) |
 | [questions/u1-bank.md](questions/u1-bank.md) | U1 项目地图与入口题库, 15 题 (2026-09-07 两轮产生, 已按主题归档) |
 | [records/2026-09-07-u1-quiz-rounds.md](records/2026-09-07-u1-quiz-rounds.md) | 2026-09-07 首轮 10 题 (6 对 3 错 1 未答) + 复测 5 题 (5/5) 的作答与判定 |
 

@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800" role="img" aria-labelledby="title desc">
+  <title id="title">U2.3: policy action 到物理状态的一页总结</title>
+  <desc id="desc">展示 Microduck 的 50Hz 策略、20ms 环境步、四个 5ms 物理子步、命令延迟、BAM 力矩与 MuJoCo 状态更新之间的关系, 以及左膝四子步实测数据。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto">
+      <path d="M0,0 L11,4 L0,8 Z" fill="#334155"/>
+    </marker>
+    <style>
+      .title { font: 700 34px 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #102a43; }
+      .subtitle { font: 400 18px 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #486581; }
+      .box-title { font: 700 22px 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #102a43; }
+      .box-text { font: 400 17px 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #243b53; }
+      .small { font: 400 15px 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #334e68; }
+      .em { font: 700 16px 'Noto Sans CJK SC', 'Microsoft YaHei', sans-serif; fill: #102a43; }
+      .value { font: 600 15px 'SFMono-Regular', Consolas, monospace; fill: #102a43; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="800" fill="#f8fbff"/>
+  <text x="56" y="58" class="title">U2.3: 一次策略动作如何变成真实关节运动</text>
+  <text x="56" y="88" class="subtitle">当前 velocity 配置: policy 50 Hz = 每 20 ms 一次, physics/BAM 200 Hz = 每 5 ms 一次</text>
+
+  <rect x="52" y="135" width="212" height="178" rx="16" fill="#dbeafe" stroke="#60a5fa" stroke-width="2"/>
+  <text x="76" y="176" class="box-title">1. Policy</text>
+  <text x="76" y="207" class="box-text">输出 14D raw action a_t</text>
+  <text x="76" y="236" class="box-text">每 20 ms 一次</text>
+  <text x="76" y="277" class="small">不是 torque, 不是 qpos</text>
+
+  <line x1="264" y1="224" x2="318" y2="224" stroke="#334155" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="326" y="135" width="232" height="178" rx="16" fill="#dcfce7" stroke="#4ade80" stroke-width="2"/>
+  <text x="350" y="176" class="box-title">2. ActionManager</text>
+  <text x="350" y="207" class="box-text">latest target =</text>
+  <text x="350" y="233" class="box-text">default + a_t × 1.0</text>
+  <text x="350" y="277" class="small">actions history 立即记为 a_t</text>
+
+  <line x1="558" y1="224" x2="612" y2="224" stroke="#334155" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="620" y="135" width="240" height="178" rx="16" fill="#f3e8ff" stroke="#c084fc" stroke-width="2"/>
+  <text x="644" y="176" class="box-title">3. DelayBuffer</text>
+  <text x="644" y="207" class="box-text">实际送给 BAM 的 target</text>
+  <text x="644" y="236" class="box-text">来自 3--6 步历史</text>
+  <text x="644" y="277" class="small">可能仍是旧 target</text>
+
+  <line x1="860" y1="224" x2="914" y2="224" stroke="#334155" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="922" y="135" width="226" height="178" rx="16" fill="#fef3c7" stroke="#fbbf24" stroke-width="2"/>
+  <text x="946" y="176" class="box-title">4. BAM</text>
+  <text x="946" y="207" class="box-text">target + qpos/qvel</text>
+  <text x="946" y="236" class="box-text">→ 电压, 摩擦, torque</text>
+  <text x="946" y="277" class="small">每 5 ms 重新计算</text>
+
+  <line x1="1035" y1="313" x2="1035" y2="362" stroke="#334155" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <rect x="830" y="370" width="318" height="140" rx="16" fill="#fee2e2" stroke="#fb7185" stroke-width="2"/>
+  <text x="855" y="412" class="box-title">5. MuJoCo physics</text>
+  <text x="855" y="442" class="box-text">torque + 重力 + 接触 + 摩擦</text>
+  <text x="855" y="471" class="box-text">→ 新 qpos / qvel</text>
+
+  <path d="M830,440 C700,440 690,440 575,440" fill="none" stroke="#334155" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect x="318" y="370" width="250" height="140" rx="16" fill="#e0f2fe" stroke="#38bdf8" stroke-width="2"/>
+  <text x="343" y="412" class="box-title">6. 新 observation</text>
+  <text x="343" y="442" class="box-text">qpos/qvel: 真实新状态</text>
+  <text x="343" y="471" class="box-text">actions: raw a_t</text>
+
+  <path d="M318,440 C238,440 204,440 158,440 C108,440 108,385 108,313" fill="none" stroke="#334155" stroke-width="3" marker-end="url(#arrow)"/>
+  <text x="62" y="349" class="small">下一次 policy</text>
+
+  <rect x="52" y="552" width="1096" height="190" rx="16" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="78" y="590" class="box-title">实测: 左膝 +0.050 rad 目标偏移, 固定 target 的前 20 ms</text>
+  <text x="80" y="627" class="em">子步</text>
+  <text x="193" y="627" class="em">时刻</text>
+  <text x="301" y="627" class="em">target</text>
+  <text x="475" y="627" class="em">实际 qpos</text>
+  <text x="676" y="627" class="em">BAM torque</text>
+  <text x="893" y="627" class="em">读法</text>
+  <line x1="78" y1="641" x2="1120" y2="641" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="80" y="676" class="value">1</text><text x="193" y="676" class="value">5 ms</text><text x="301" y="676" class="value">0.04510</text><text x="475" y="676" class="value">-0.00467</text><text x="676" y="676" class="value">0.02772 Nm</text><text x="893" y="676" class="small">刚开始向目标移动</text>
+  <text x="80" y="710" class="value">4</text><text x="193" y="710" class="value">20 ms</text><text x="301" y="710" class="value">0.04510</text><text x="475" y="710" class="value">-0.00353</text><text x="676" y="710" class="value">0.02355 Nm</text><text x="893" y="710" class="small">误差变小, torque 下降</text>
+  <text x="78" y="777" class="small">要点: latest target 固定, 但 BAM 读到的 target、torque 和 qpos 都可能每个子步不同.</text>
+</svg>

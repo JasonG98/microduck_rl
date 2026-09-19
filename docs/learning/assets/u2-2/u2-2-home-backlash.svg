@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1120" viewBox="0 0 1600 1120">
+  <rect width="1500" height="980" fill="#f7f9fc"/>
+  <style>
+    .title { font: 700 28px sans-serif; fill: #172033; }
+    .h2 { font: 700 21px sans-serif; fill: #172033; }
+    .text { font: 16px sans-serif; fill: #263247; }
+    .small { font: 14px sans-serif; fill: #394861; }
+    .mono { font: 14px monospace; fill: #263247; }
+    .box { stroke: #6b7890; stroke-width: 2; rx: 14; }
+    .line { stroke: #52627a; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+    .dash { stroke: #8390a5; stroke-width: 2; fill: none; stroke-dasharray: 8 6; marker-end: url(#arrow); }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L9,3 L0,6 Z" fill="#52627a"/>
+    </marker>
+  </defs>
+
+  <text x="50" y="52" class="title">U2.2：HOME_FRAME、joint 名字映射与 backlash</text>
+  <text x="50" y="82" class="small">核心：名字是稳定语义；数组索引是当前模型的实现细节。</text>
+
+  <text x="50" y="125" class="h2">一、robot_walk.xml 的 joint/body 结构</text>
+  <rect x="50" y="150" width="280" height="72" class="box" fill="#dcecff"/>
+  <text x="75" y="180" class="mono">trunk_base</text>
+  <text x="75" y="205" class="small">根 body + freejoint</text>
+
+  <path d="M190 222 L190 255" class="line"/>
+  <rect x="50" y="260" width="280" height="62" class="box" fill="#e7f5e9"/>
+  <text x="75" y="288" class="mono">trunk_base_freejoint</text>
+  <text x="75" y="310" class="small">浮动基座：qpos 7, qvel 6</text>
+
+  <path d="M190 222 L190 370" class="line"/>
+  <rect x="50" y="375" width="280" height="275" class="box" fill="#fff0d6"/>
+  <text x="75" y="405" class="h2">左腿链</text>
+  <text x="75" y="438" class="mono">yaw2roll</text>
+  <text x="105" y="462" class="mono">left_hip_yaw</text>
+  <text x="75" y="495" class="mono">hip_l</text>
+  <text x="105" y="519" class="mono">left_hip_roll</text>
+  <text x="75" y="552" class="mono">upper_leg_left</text>
+  <text x="105" y="576" class="mono">left_hip_pitch</text>
+  <text x="75" y="609" class="mono">leg → ankle_left</text>
+  <text x="105" y="633" class="mono">left_knee → left_ankle</text>
+
+  <rect x="365" y="375" width="280" height="175" class="box" fill="#f4e4ff"/>
+  <text x="390" y="405" class="h2">颈头链</text>
+  <text x="390" y="440" class="mono">neck → neck_pitch</text>
+  <text x="420" y="464" class="mono">neck_pitch</text>
+  <text x="390" y="500" class="mono">yaw_roll_motion</text>
+  <text x="420" y="524" class="mono">head_yaw</text>
+  <text x="420" y="548" class="mono">head_roll (jaw_soft)</text>
+  <text x="420" y="572" class="mono">head_pitch</text>
+
+  <rect x="680" y="375" width="280" height="275" class="box" fill="#fff0d6"/>
+  <text x="705" y="405" class="h2">右腿链</text>
+  <text x="705" y="438" class="mono">bearing_roll</text>
+  <text x="735" y="462" class="mono">right_hip_yaw</text>
+  <text x="705" y="495" class="mono">hip_l_2</text>
+  <text x="735" y="519" class="mono">right_hip_roll</text>
+  <text x="705" y="552" class="mono">upper_leg_right</text>
+  <text x="735" y="576" class="mono">right_hip_pitch</text>
+  <text x="705" y="609" class="mono">leg_2 → ankle_right</text>
+  <text x="735" y="633" class="mono">right_knee → right_ankle</text>
+
+  <text x="1010" y="155" class="h2">14 个主动 servo 的动作顺序</text>
+  <rect x="1010" y="180" width="430" height="165" class="box" fill="#e8f0ff"/>
+  <text x="1040" y="215" class="mono">0–4   左腿</text>
+  <text x="1040" y="245" class="mono">5–8   neck/head</text>
+  <text x="1040" y="275" class="mono">9–13  右腿</text>
+  <text x="1040" y="315" class="small">freejoint 不属于 14D 动作。</text>
+
+  <text x="50" y="710" class="h2">二、HOME_FRAME 如何变成初始状态</text>
+  <rect x="50" y="740" width="250" height="105" class="box" fill="#fff5cc"/>
+  <text x="75" y="775" class="mono">HOME_FRAME</text>
+  <text x="75" y="805" class="small">名字模式 → 角度</text>
+  <text x="75" y="829" class="small">joint_vel → 全部 0</text>
+  <path d="M300 793 L390 793" class="line"/>
+  <rect x="390" y="740" width="290" height="105" class="box" fill="#e8f0ff"/>
+  <text x="415" y="775" class="mono">resolve_expr()</text>
+  <text x="415" y="805" class="small">逐个 joint 检查</text>
+  <text x="415" y="829" class="small">第一个匹配规则优先</text>
+  <path d="M680 793 L770 793" class="line"/>
+  <rect x="770" y="740" width="250" height="105" class="box" fill="#e7f5e9"/>
+  <text x="795" y="775" class="mono">init keyframe</text>
+  <text x="795" y="805" class="small">初始 qpos</text>
+  <text x="795" y="829" class="small">初始 ctrl target</text>
+  <path d="M1020 793 L1110 793" class="line"/>
+  <rect x="1110" y="740" width="330" height="105" class="box" fill="#dcecff"/>
+  <text x="1135" y="775" class="mono">MuJoCo 环境启动</text>
+  <text x="1135" y="805" class="small">目标不等于已经运动到</text>
+  <text x="1135" y="829" class="small">实际 qpos 仍由物理推进</text>
+
+  <text x="50" y="900" class="h2">三、backlash：内部多状态，策略仍是同一接口</text>
+  <rect x="50" y="925" width="420" height="105" class="box" fill="#e7f5e9"/>
+  <text x="78" y="963" class="mono">servo qpos</text>
+  <text x="78" y="992" class="mono">+ passive backlash qpos → link</text>
+  <path d="M470 977 L530 977" class="line"/>
+  <rect x="530" y="925" width="420" height="105" class="box" fill="#f4e4ff"/>
+  <text x="558" y="963" class="mono">观测 = servo + backlash</text>
+  <text x="558" y="992" class="small">读取输出侧 encoder 视角</text>
+  <path d="M950 977 L1010 977" class="line"/>
+  <rect x="1010" y="925" width="480" height="105" class="box" fill="#fff0d6"/>
+  <text x="1038" y="963" class="mono">action 仍为14D</text>
+  <text x="1038" y="992" class="small">只控制主动 servo, 不控制 passive joint</text>
+</svg>
