@@ -79,6 +79,23 @@ def default_bc_cfg() -> dict:
         "anchor_checkpoint_path": None,
         "anchor_coef": 1.0,
         "anchor_tilt_deg": 25.0,
+        # body 控制帧路由 (2026-10, branch improve_velstand2). 设置 body_slice 后,
+        # 满足 twist obs 恰好为 0 (STANDING) 且在 body_active_axes 上有非零
+        # body 指令的帧会脱离 walk anchor: walk expert 忽略 body 指令,
+        # 会把它们钉死在水平站姿上. 其中 body_no_teacher_axes 全为零
+        # (只含 tilt) 的帧改由 stand expert 教, 它能跟踪 roll/pitch
+        # (指令 10° 时实测 9.2-9.5°); 而指令命中任一 body_no_teacher_axes
+        # (z: stand expert 不会下蹲) 的帧留给 PPO. 指令本身就在 obs 里,
+        # 所以这些帧是可分离的. 这与 run rqunethx 中泄漏进来的
+        # rise-catch / push-stumble 划分不同.
+        "body_slice": None,
+        # turn-in-place 帧 (线速度指令恰好为 0, |yaw 指令| > 0) 会脱离 walk anchor:
+        # alpha_walking 在 ~0.6 rad/s 以下原地不动 (这个死区正在被训练消除),
+        # 而 coef-1.0 的 BC 把此前每次 yaw 修正都钉死了. 可分离:
+        # 指令本身就在 obs 里.
+        "unanchor_turn_in_place": False,
+        "body_active_axes": (2, 3, 4),
+        "body_no_teacher_axes": (2,),
     }
 
 
@@ -96,6 +113,29 @@ def fallen_mask_from_obs(obs: torch.Tensor, gravity_slice: tuple[int, int], gate
     g = g / g.norm(dim=1, keepdim=True).clamp_min(1e-6)  # obs noise / IMU DR: renormalize
     cos_tilt = -g[:, 2]
     return cos_tilt < torch.cos(torch.deg2rad(torch.tensor(gate_tilt_deg, device=obs.device)))
+
+
+def turn_in_place_mask(obs: torch.Tensor, twist_slice: tuple[int, int], eps: float = 1e-6) -> torch.Tensor:
+    """线速度指令恰好为 0 且 yaw 指令非零 (指令 obs 不带噪声)."""
+    tw = obs[:, twist_slice[0]:twist_slice[1]]
+    return (tw[:, :2].abs().amax(dim=1) <= eps) & (tw[:, 2].abs() > eps)
+
+
+def body_frame_masks(
+    obs: torch.Tensor, twist_slice: tuple[int, int], body_slice: tuple[int, int],
+    active_axes: tuple[int, ...], no_teacher_axes: tuple[int, ...], eps: float = 1e-6,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """(body frames 脱离 walk anchor, teach frames 交给 stand expert). 指令 obs 不带
+    噪声, 因此 "twist == 0" 与 "axis == 0" 都是精确判定."""
+    standing = obs[:, twist_slice[0]:twist_slice[1]].abs().amax(dim=1) <= eps
+    body = obs[:, body_slice[0]:body_slice[1]]
+    active = body[:, list(active_axes)].abs().amax(dim=1) > eps
+    frames = standing & active
+    if no_teacher_axes:
+        frames_teach = frames & (body[:, list(no_teacher_axes)].abs().amax(dim=1) <= eps)
+    else:
+        frames_teach = frames
+    return frames, frames_teach
 
 
 def expert_input(obs: torch.Tensor, twist_slice: tuple[int, int]) -> torch.Tensor:
@@ -160,7 +200,20 @@ class PpoWithExpertBc(PPO):
         gsl = tuple(cfg["gravity_slice"])
         fallen = fallen_mask_from_obs(flat, gsl, cfg["gate_tilt_deg"])
         upright = ~fallen_mask_from_obs(flat, gsl, cfg["anchor_tilt_deg"]) if self.anchor is not None else torch.zeros_like(fallen)
-        stats = {"expert_bc_fallen_frac": fallen.float().mean().item(), "expert_bc_anchor_frac": upright.float().mean().item()}
+        body_teach = torch.zeros_like(fallen)
+        if cfg.get("body_slice") is not None:
+            body_frames, body_teach = body_frame_masks(flat, tuple(cfg["twist_slice"]), tuple(cfg["body_slice"]),
+                                                       tuple(cfg["body_active_axes"]), tuple(cfg["body_no_teacher_axes"]))
+            upright = upright & ~body_frames
+            body_teach = body_teach & ~fallen
+        turn_free = torch.zeros_like(fallen)
+        if cfg.get("unanchor_turn_in_place"):
+            turn_free = turn_in_place_mask(flat, tuple(cfg["twist_slice"]))
+            upright = upright & ~turn_free
+        stats = {"expert_bc_fallen_frac": fallen.float().mean().item(), "expert_bc_anchor_frac": upright.float().mean().item(),
+                 "expert_bc_body_teach_frac": body_teach.float().mean().item(),
+                 "expert_bc_turn_free_frac": turn_free.float().mean().item()}
+        fallen = fallen | body_teach
         if fallen.sum().item() < cfg["min_samples"]:
             fallen = torch.zeros_like(fallen)  # too few fallen frames: anchor-only pass (or nothing)
         use = fallen | upright

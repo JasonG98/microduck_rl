@@ -10,9 +10,10 @@
     # 针对某个槽位的步态 (无 hold, 无 unwind: 会一直运行, 直到另行指示)
     uv run publish --onnx walk.onnx --repo <user>/microduck-my-walk --kind perpetual --slot walk
 
-无论哪种路径, 仓库都会获得 `policy.onnx`, schema-2 的 `manifest.json` 和一份 README; 文件在
-上传前会先校验 61 -> 14 形状并进行冒烟运行, 且已有的 `policy.onnx` 在未指定 `--force` 时
-不会被覆盖. `--dry-run` 会把仓库内容写到本地目录然后结束.
+无论哪种路径, 仓库都会获得 `policy.onnx`, schema-2 的 `manifest.json` 和一份 README
+(带 `--video` 时还会有 `replay.mp4`, 由 Hub 的 replay 组件展示); 文件在上传前会先校验
+61 -> 14 形状并进行冒烟运行, 且已有的 `policy.onnx` 在未指定 `--force` 时不会被覆盖.
+`--dry-run` 会把仓库内容写到本地目录然后结束.
 """
 
 from __future__ import annotations
@@ -48,6 +49,12 @@ class PublishConfig:
     """本地的 model_<N>.pt, 用来代替 wandb."""
     onnx: str | None = None
     """已导出的 ONNX. 只会校验, 不会重新导出."""
+    video: str | None = None
+    """策略运行的 MP4 (例如来自 scripts/render_policy.py). 会上传为 replay.mp4."""
+
+    base_model: str | None = None
+    """派生策略: 本策略训练来源的 Hub 仓库 (warm start / 微调).
+    会在模型卡中声明为 `base_model`, 以便 Hub 把两者关联起来."""
 
     # -- manifest 会写明的内容
     name: str | None = None
@@ -143,6 +150,9 @@ def run(cfg: PublishConfig) -> int:
     if "/" not in cfg.repo:
         _fail("--repo 必须是 `<user-or-org>/<name>`")
     name = cfg.name or _default_name(cfg.repo)
+    video = Path(cfg.video) if cfg.video is not None else None
+    if video is not None and (not video.is_file() or video.suffix.lower() != ".mp4"):
+        _fail(f"--video {cfg.video}: expected an existing .mp4 file")
 
     workdir = Path(tempfile.mkdtemp(prefix="microduck-publish-"))
     try:
@@ -174,19 +184,23 @@ def run(cfg: PublishConfig) -> int:
         staged.mkdir()
         shutil.copyfile(onnx_path, staged / m.POLICY_FILE)
         (staged / "manifest.json").write_text(m.dump_manifest(manifest))
-        (staged / "README.md").write_text(m.render_readme(manifest, cfg.repo))
+        (staged / "README.md").write_text(m.render_readme(manifest, cfg.repo, cfg.base_model))
+        if video is not None:
+            shutil.copyfile(video, staged / m.REPLAY_FILE)
 
         if cfg.dry_run:
             dest = Path.cwd() / f"publish-{name}"
             if dest.exists():
                 shutil.rmtree(dest)
             shutil.copytree(staged, dest)
-            print(f"[publish] 干运行: 已写入 {dest}/ (policy.onnx, manifest.json, README.md)")
+            print(f"[publish] 干运行: 已写入 {dest}/ ({', '.join(sorted(p.name for p in dest.iterdir()))})")
             return 0
 
         from huggingface_hub import HfApi
 
         api = HfApi()
+        if cfg.base_model is not None and not api.repo_exists(cfg.base_model, repo_type="model"):
+            _fail(f"--base-model {cfg.base_model}: Hub 上没有这个模型仓库 (或没有访问权限)")
         api.create_repo(cfg.repo, repo_type="model", private=cfg.private, exist_ok=True)
         existing = set(api.list_repo_files(cfg.repo))
         onnx_files = {f for f in existing if f.endswith(".onnx")}

@@ -28,6 +28,10 @@ ROBOT: dict[str, Any] = {"model": "microduck", "hw_rev": 1, "servos": "xl330", "
 # 仓库携带的唯一一个 `.onnx`. 守护进程取仓库里唯一那个 `.onnx`, 有多个则拒绝.
 POLICY_FILE = "policy.onnx"
 
+# A rollout video, if the repo carries one. The Hub's replay widget picks up a file of exactly
+# this name, so it is shown there and neither the manifest nor the README points at it.
+REPLAY_FILE = "replay.mp4"
+
 Kind = Literal["episodic", "perpetual"]
 KINDS: tuple[str, ...] = ("episodic", "perpetual")
 
@@ -320,8 +324,16 @@ Episodic: 一个技能, 时长取自 manifest. 带 `unwind_s` 的 perpetual: 属
     return f"sudo robotctl policy load {slot} {repo_id}"
 
 
-def render_readme(manifest: dict[str, Any], repo_id: str) -> str:
-    """说明如何在机器人上运行该策略的模型卡片, 自动生成以免过期."""
+def render_readme(manifest: dict[str, Any], repo_id: str, base_model: str | None = None) -> str:
+    """说明如何在机器人上运行该策略的模型卡片, 自动生成以免过期.
+
+    ``base_model`` 是派生策略的训练来源仓库; 卡片会声明它, 以便 Hub 把两者关联起来
+    (父仓库会把本仓库列为其微调结果之一).
+    """
+    if base_model is not None:
+        _check_repo_id(base_model, "base_model")
+        if base_model == repo_id:
+            raise ManifestError(f"base_model {base_model!r} 就是正在发布的仓库")
     kind = manifest["kind"]
     name = manifest["name"]
     description = manifest.get("description", "")
@@ -348,7 +360,11 @@ def render_readme(manifest: dict[str, Any], repo_id: str) -> str:
         "- robotics",
         "- reinforcement-learning",
         "- onnx",
-        "library_name: onnx",
+        # The Hub's `robotctl policy load <slot>` snippet reads the slot from this tag.
+        *([f"- microduck-slot:{manifest['slot']}"] if manifest.get("slot") else []),
+        "library_name: microduck",
+        "pipeline_tag: robotics",
+        *([f"base_model: {base_model}", "base_model_relation: finetune"] if base_model else []),
         "---",
         "",
         f"# {name}",
@@ -368,6 +384,8 @@ def render_readme(manifest: dict[str, Any], repo_id: str) -> str:
         "`manifest.json` follows schema 2 of the microduck policy manifest "
         "(`docs/policy-manifest.md` in the daemon repo).",
     ]
+    if base_model:
+        lines += ["", f"A remix of [{base_model}](https://huggingface.co/{base_model})."]
     if training:
         lines += ["", "## Training", ""]
         for key in ("task_id", "repo", "branch", "commit", "run", "checkpoint", "exported"):
@@ -376,6 +394,12 @@ def render_readme(manifest: dict[str, Any], repo_id: str) -> str:
         if training.get("dirty"):
             lines.append("- exported from a checkout with uncommitted changes")
     return "\n".join(lines) + "\n"
+
+
+def _check_repo_id(repo_id: str, what: str) -> None:
+    owner, _, name = repo_id.partition("/")
+    if not owner or not name or "/" in name or repo_id != repo_id.strip():
+        raise ManifestError(f"{what} must be a Hub repo id `<user-or-org>/<name>`, not {repo_id!r}")
 
 
 def dump_manifest(manifest: dict[str, Any]) -> str:
