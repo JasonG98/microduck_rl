@@ -192,6 +192,16 @@ uv run publish --onnx output.onnx --repo <user>/microduck-flamingo \
 # 为某个槽位新增步态
 uv run publish --onnx output.onnx --repo <user>/microduck-my-walk --kind perpetual --slot walk
 
+# 连复盘视频一起上传: 会上传为 replay.mp4, 由 Hub 的 replay 组件播放
+uv run scripts/render_policy.py output.onnx --seconds 10 --video media/bow.mp4
+uv run publish --onnx output.onnx --repo <user>/microduck-bow --kind episodic --duration-s 4.0 \
+    --video media/bow.mp4
+
+# 派生策略 (warm start / 在别人已发布的策略上微调): 写明父仓库, 模型卡会设置 `base_model`
+# 并在 Hub 上把两者关联起来
+uv run publish --onnx output.onnx --repo <user>/microduck-deep-bow --kind episodic --duration-s 5.0 \
+    --base-model <owner>/microduck-polite-bow
+
 # 预演上传内容而不触碰 Hub
 uv run publish --onnx output.onnx --repo <user>/microduck-bow --kind episodic --duration-s 4.0 --dry-run
 ```
@@ -242,5 +252,9 @@ uv run --with pytest pytest tests/
 
 ## 许可证
 
-本项目基于 Apache 2.0 许可证. 详情见 [LICENSE](LICENSE) 文件.
-3D 模型文件采用 Creative Commons BY-SA-NC 许可证.
+本仓库中的代码基于 Apache 2.0 许可证. 详情见 [LICENSE](LICENSE) 文件.
+
+3D 模型文件 (`src/mjlab_microduck/robot/microduck/assets/` 和
+`src/mjlab_microduck/robot/xl330_test_bench/assets/` 下的 `.stl` 网格) 采用
+[Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
+许可证. 确切范围与署名要求见 [LICENSE-MODELS.md](LICENSE-MODELS.md).

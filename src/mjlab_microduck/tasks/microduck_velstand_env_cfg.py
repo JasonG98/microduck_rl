@@ -1,5 +1,15 @@
 """Microduck VelStand 环境: 行走 + 摔倒保护 + 恢复, 单 policy.
 
+当前策略 (Hub v7, 2026-10-05): wandb j4i6yoq2 @ model_1250, 由本文件在提交 53fb7d1 处训练得到 --
+在 ENABLE_BODY_CONTROL 下从 fhathosb@3750 热启动. 谱系, 启动命令与评估数据见
+docs/velstand_policy.md.
+
+身体控制 (2026-10, ENABLE_BODY_CONTROL): body_pose 的 roll/pitch (± z) 只在站立时接受指令
+(StandingGatedPoseCommand: 行走时精确为零, 与部署一致). 仅倾斜的帧从 alpha_stand 蒸馏而来,
+z 帧交给 PPO, 两者都取自 walk anchor (distill.py 的 body 路由); 站立门控的跟踪奖励 +
+相对指令的竖直项 + 放宽的腿部姿态 std. roll/pitch 在机器人上约为 ±10° 指令对应 ±8-10°;
+z (下蹲) 没有学出来. ENABLE_YAW_FIX 是一次有记录失败的实验 (OFF) — 见其注释.
+
 PROTECTIVE-FALL 重建 (2026-09, 分支 protective_fall). 动机: 真实机器人
 不断损坏 XL330 齿轮箱. daemon 的摔倒检测跛行 (kp→50) 有帮助但不完美,
 且跛行→站立交接产生 "抽搐". 目标: 一个既能行走、又能以保护舵机的方式
@@ -250,6 +260,61 @@ ENABLE_EXPERT_BC = True
 EXPERT_BC_COEF = 1.0
 EXPERT_BC_GATE_TILT_DEG = 35.0
 
+# 身体控制 (2026-10, 分支 improve_velstand2). 已部署的 velstand 完全忽略身体指令
+# (实测: 0 mm / 0° 响应 — 继承来的 velocity 配方让 body_pose 权重为 0, 只留 ±5 mm/±0.05
+# 的存活范围, 而 walk anchor 把站立钉在 alpha_walking 上, 它从未学过). 旧流水线的
+# alpha_stand 能跟踪 roll/pitch (10° 指令对应 9.2-9.5°) 但不会 z (+1 cm → +3.7 mm,
+# 下蹲 → 0). 所以:
+#   - 只在站立时接受指令 (StandingGatedPoseCommand: 行走时精确为零 = 部署状态),
+#     30% 全零桶, 使普通站立行为始终被训练;
+#   - 仅倾斜的帧 (z == 0, 占 BODY_Z_ZERO_PROB) → stand expert BC;
+#     z 帧 → 只交给 PPO (alpha_stand 不会下蹲); 两者都取自 walk anchor
+#     (distill.py 的 body 路由 — 可分离: 指令本身就在 obs 里);
+#   - 站立门控的 z/roll/pitch 跟踪奖励 + 直立项改为相对指令 (行走 / 零指令时两者一致).
+ENABLE_BODY_CONTROL = True
+BODY_NOMINAL_Z = 0.116             # 实测: allcollisions 上的站立躯干 z (fhathosb 0.1158, alpha_stand 0.1157)
+BODY_CMD_MAX_ANGLE = math.radians(12)   # ≈ alpha_stand 训练范围 (normalizer std 0.10 rad)
+BODY_CMD_Z_RANGE = (-0.025, 0.010)      # 下蹲空间在 HOME 之下, 之上约有 1 cm 伸展
+BODY_ALIVE_XY = 0.002              # x/y/yaw 不跟踪: 落在 alpha_stand normalizer 内的极小范围
+BODY_ALIVE_YAW = 0.02
+BODY_ZERO_CMD_PROB = 0.3
+BODY_Z_ZERO_PROB = 0.5             # 身体指令中仅倾斜 (可教) 的占比
+BODY_TRACK_WEIGHT = 2.0
+BODY_RANGE_STAGES_ITERS = (0, 300)  # 半范围 → 全范围 (热启动: 本次运行的迭代数)
+# 身体指令激活 (站立) 时的腿部姿态 std. 站立 std (hip_roll 0.05, knee/hip_pitch 0.15,
+# ankle 0.1) 让 10° 的 roll 指令每 step 要付 -0.85.
+BODY_POSE_STD = {
+    r".*hip_yaw.*": 0.1,
+    r".*hip_roll.*": 0.25,
+    r".*hip_pitch.*": 0.4,
+    r".*knee.*": 0.4,
+    r".*ankle.*": 0.3,
+}
+
+# 偏航死角修复 (2026-10-01). 机器人: "转向还是很差". j4i6yoq2@1250
+# 在 sim 中: 原地 0.3 / 0.6 rad/s → 0.00 / 0.07, 1.0 → 0.45. 反事实 (同一
+# policy 喂入更大的 yaw 指令使其踏步并转向, 奖励按真实指令计): 原地不动
+# 在 0.3 时就是奖励最优, 0.6 时转向只赢 4% — 原装 yaw std 0.71 在小误差处太松,
+# 且 mjlab 的项混入了踏步产生的 roll/pitch 速率. 修复:
+#   - 在未改动的原装项旁边 ADD 一个仅 yaw 的精细项 (std 0.35, 权重 2).
+#     运行 sape62zb 却是把原装项替换成精细项: 转向更差了
+#     (1.0 rad/s 0.42 → 0.16 @1500) — 在 policy 0.6 rad/s 的误差处没有梯度.
+#     加性余量: 0.6 rad/s +0.33 → +0.97/step, 1.0 +0.62 → +1.05;
+#   - 原地转向桶从 0.1 起采样 |wz| (原为 0.4: 原地 yaw < 0.4 从未训练过);
+#   - 原地转向帧取自 walk anchor (alpha_walking 正是这个死角).
+# OFF — 带它的两次运行都丢了转向 (sape62zb: 替换项; brkpcnn8: 加性项;
+# 原地 ±1.0 rad/s 0.39/−0.36 → 250 iter 内约 0.2-0.3, 0.3/0.6 仍 ≈0). 共同
+# 因素 = 未锚定的转向帧: walk anchor 是转向地板, 即使有正的奖励余量 PPO 也
+# 不会发现慢速转向. 真正有效的是指令 REMAP: 喂入更大的 yaw 时 policy 单调转向
+# (喂 1.0/1.5/2.0 → 原地 0.40/0.80/1.09 rad/s, 无摔倒); 运行时 fed = sign(c)·(0.33 + |c|/0.6)
+# 使 v7 (j4i6yoq2@1250) 在 sim 中跟踪 0.5-1.0 rad/s (见 docs/velstand_policy.md). 保持 OFF
+# 以便本文件复现已发布的 v7 配方 (提交 53fb7d1).
+ENABLE_YAW_FIX = False
+TRACK_YAW_FINE_STD = 0.35
+TRACK_YAW_FINE_WEIGHT = 2.0
+TURN_IN_PLACE_FRACTION_VELSTAND = 0.2    # velocity 配方: 0.15
+TURN_IN_PLACE_MIN_FRAC = 0.1             # velocity 配方: 0.4
+
 # Run-1 修复 (1): 摔倒时平滑税按比例缩小, 使起身尝试负担得起; 直立时全额
 # (walk 的平滑不受影响).
 FALLEN_SMOOTHNESS_SCALE = 0.1
@@ -327,6 +392,68 @@ def _collapse_curricula_to_final(cfg: ManagerBasedRlEnvCfg) -> None:
                     cfg.rewards[term.params["reward_name"]].weight = final["weight"]
 
 
+def _body_ranges(frac: float) -> tuple[tuple[float, float], ...]:
+    a = BODY_CMD_MAX_ANGLE * frac
+    return (
+        (-BODY_ALIVE_XY, BODY_ALIVE_XY),
+        (-BODY_ALIVE_XY, BODY_ALIVE_XY),
+        (BODY_CMD_Z_RANGE[0] * frac, BODY_CMD_Z_RANGE[1] * frac),
+        (-a, a),
+        (-a, a),
+        (-BODY_ALIVE_YAW, BODY_ALIVE_YAW),
+    )
+
+
+def _add_body_control(cfg: ManagerBasedRlEnvCfg, play: bool) -> None:
+    """Standing-only body pose control (see ENABLE_BODY_CONTROL). Call AFTER the
+    warm-start collapse: it replaces the inherited body_pose command/curriculum."""
+    old = cfg.commands["body_pose"]
+    cfg.commands["body_pose"] = microduck_mdp.StandingGatedPoseCommandCfg(
+        resampling_time_range=old.resampling_time_range,
+        ranges=_body_ranges(1.0 if play else 0.5),
+        zero_command_prob=BODY_ZERO_CMD_PROB,
+        axis_zero_prob=(0.0, 0.0, BODY_Z_ZERO_PROB, 0.0, 0.0, 0.0),
+        twist_command_name="twist",
+    )
+    assert list(cfg.commands).index("twist") < list(cfg.commands).index("body_pose"), "twist must be computed first"
+    cfg.curriculum.pop("body_pose_range", None)
+    if not play:
+        cfg.curriculum["body_pose_range"] = CurriculumTermCfg(
+            func=microduck_mdp.pose_command_range_curriculum,
+            params={
+                "command_name": "body_pose",
+                "range_stages": [
+                    {"step": it * NUM_STEPS_PER_ENV, "ranges": _body_ranges(f)}
+                    for it, f in zip(BODY_RANGE_STAGES_ITERS, (0.5, 1.0))
+                ],
+            },
+        )
+    cfg.rewards["body_pose_tracking"] = RewardTermCfg(
+        func=microduck_mdp.body_pose_tracking_locomotion,
+        weight=BODY_TRACK_WEIGHT,
+        params={
+            "command_name": "body_pose",
+            "nominal_height": BODY_NOMINAL_Z,
+            "z_std": 0.01,
+            "angle_std": math.radians(5),
+            "axis_weights": (0.0, 0.0, 1.0, 1.0, 1.0, 0.0),
+            "standing_gate_command_name": "twist",
+        },
+    )
+    pose = cfg.rewards["pose"]
+    cfg.rewards["pose"] = RewardTermCfg(
+        func=microduck_mdp.variable_posture_body_relaxed,
+        weight=pose.weight,
+        params={**pose.params, "std_body": BODY_POSE_STD, "body_command_name": "body_pose"},
+    )
+    up = cfg.rewards["upright"]
+    cfg.rewards["upright"] = RewardTermCfg(
+        func=microduck_mdp.upright_body_cmd_relative,
+        weight=up.weight,
+        params={"std": up.params["std"], "command_name": "body_pose", "asset_cfg": up.params["asset_cfg"]},
+    )
+
+
 def make_microduck_velstand_env_cfg(play: bool = False, rough: bool = False) -> ManagerBasedRlEnvCfg:
     """构建 VelStand 环境 cfg (velocity 配方 + 摔倒恢复 + 身体姿态)."""
     # 行走层: 已验证的 velocity 配方, 逐字.
@@ -340,6 +467,18 @@ def make_microduck_velstand_env_cfg(play: bool = False, rough: bool = False) -> 
     # 课程钉在最终阶段.
     if WARM_START and not play:
         _collapse_curricula_to_final(cfg)
+
+    if ENABLE_BODY_CONTROL:
+        _add_body_control(cfg, play)
+    if ENABLE_YAW_FIX:
+        tw = cfg.commands["twist"]
+        tw.rel_turn_in_place_envs = TURN_IN_PLACE_FRACTION_VELSTAND
+        tw.turn_in_place_min_frac = TURN_IN_PLACE_MIN_FRAC
+        cfg.rewards["track_yaw_fine"] = RewardTermCfg(
+            func=microduck_mdp.track_yaw_rate_fine,
+            weight=TRACK_YAW_FINE_WEIGHT,
+            params={"std": TRACK_YAW_FINE_STD, "command_name": cfg.rewards["track_angular_velocity"].params["command_name"]},
+        )
 
     # 真正的全碰撞模型: 机器人可以躺在/推开任何部件, 且舵机外壳已命名, 使
     # 下方的冲击传感器能单独识别它们. 70 个碰撞 geom (vs 11) → 堆叠时有更多
@@ -672,7 +811,11 @@ MicroduckVelStandRlCfg = RslRlOnPolicyRunnerCfg(
         desired_kl=0.01,
         max_grad_norm=1.0,
         symmetry_cfg=None,
-        bc_cfg={**default_bc_cfg(), "coef": EXPERT_BC_COEF, "gate_tilt_deg": EXPERT_BC_GATE_TILT_DEG} if ENABLE_EXPERT_BC else None,
+        bc_cfg={
+            **default_bc_cfg(), "coef": EXPERT_BC_COEF, "gate_tilt_deg": EXPERT_BC_GATE_TILT_DEG,
+            **({"body_slice": (55, 61)} if ENABLE_BODY_CONTROL else {}),
+            **({"unanchor_turn_in_place": True} if ENABLE_YAW_FIX else {}),
+        } if ENABLE_EXPERT_BC else None,
     ),
     wandb_project="mjlab_microduck",
     experiment_name="velstand",
